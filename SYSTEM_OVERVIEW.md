@@ -7,6 +7,7 @@ Tài liệu này mô tả **đầy đủ thông tin, cấu trúc và flow hoạt
 ## 1) Mục tiêu hệ thống
 
 Hệ thống là một **research assistant** đa tác tử (multi-agent) với:
+
 - **LangGraph orchestration** cho pipeline agent.
 - **MCP server (FastAPI)** làm “tool layer” và API gateway cho UI.
 - **Hybrid Web Search**: Tavily (nếu có key) → fallback DuckDuckGo.
@@ -16,6 +17,9 @@ Hệ thống là một **research assistant** đa tác tử (multi-agent) với:
 - **Compare patterns**: chạy nhiều pattern trên cùng query (`react`, `planner`, `rewoo`) + lưu lịch sử.
 - **Streamlit UI** cho demo.
 - **Optional observability**: LangSmith tracing (bật khi có `LANGCHAIN_API_KEY`).
+- **Session memory (NEW)**:
+  - short-term memory: SQLite chat history theo `session_id`
+  - long-term memory: semantic memory store trong Chroma (scoped theo `session_id`)
 
 ---
 
@@ -32,11 +36,15 @@ flowchart LR
   mcp -->|/retrieve| chroma[Chroma_Vector_DB]
   mcp -->|/query_papers /save_papers| sqlite[SQLite_research.db]
   mcp -->|/history| sqlite
+  mcp -->|chat_messages| sqlite
+  mcp -->|memory collection| chroma
 
   langgraph --> planner[PlannerAgent]
+  langgraph --> memLoad[load_memory_node]
   langgraph --> research[ResearchAgent]
   langgraph --> rag[RAGAgent]
   langgraph --> synth[SynthesizerAgent]
+  langgraph --> memStore[store_memory_node]
 
   chroma -->|embeddings| hfEmb[HF_MiniLM_Embeddings]
 ```
@@ -49,15 +57,16 @@ flowchart LR
 .
 ├── agents/
 │   ├── planner.py           # tạo plan: ["search_web","search_paper","retrieve","synthesize"]
+│   ├── memory_planner.py    # memory-aware planner node (adjust plan after loading memory)
 │   ├── router.py            # heuristic router: fast_path vs research_path
 │   ├── research_agent.py    # bounded ReAct loop + DB cache integration (/query_papers, /save_papers) + observations/errors
 │   ├── rag_agent.py         # gọi MCP /retrieve (via ToolClient)
-│   ├── context_compress.py  # compress docs -> context (rule-based)
+│   ├── memory_nodes.py      # load_memory / memory_rag / store_memory
 │   ├── critic.py            # guardrail + bounded retry signal (1 extra RAG pass)
 │   └── synth_agent.py       # OpenRouter -> fallback (consumes context)
 ├── graph/
 │   ├── state.py             # unified GraphState contract (TypedDict)
-│   └── build_graph.py       # adaptive graph: planner->router->(fast_path|research)->rag->compress->synth->critic
+│   └── build_graph.py       # graph: planner->load_memory->memory_planner->router->(fast|hybrid|research)->rag->memory_rag->synth->critic->store_memory
 ├── mcp_server/
 │   ├── server.py            # FastAPI endpoints + SQLite + orchestration wrappers
 │   └── Dockerfile
@@ -67,7 +76,10 @@ flowchart LR
 ├── rag/
 │   ├── vector_store.py      # Chroma + HF embeddings + bootstrap seed docs (chunked)
 │   └── chunking.py          # deterministic rule-based chunker
+├── session_manager.py       # SQLite session history (chat_messages)
+├── memory_store.py          # Chroma-based long-term memory store (scoped by session_id)
 ├── ui.py                    # Streamlit demo UI (compare + history)
+├── ui_graph.py              # Streamlit graph viewer (agraph + live/replay execution)
 ├── main.py                  # CLI runner (planner/react/rewoo), optional LangSmith
 ├── docker-compose.yml       # services: mcp, app, ui + volumes
 ├── requirements.txt
@@ -80,10 +92,12 @@ flowchart LR
 ## 4) MCP API surface (FastAPI)
 
 ### Health
+
 - **GET** `/health`
   - Output: `{ "status": "ok" }`
 
 ### Web search (hybrid)
+
 - **GET** `/search_web?q=...`
   - Behavior:
     - Tavily nếu có `TAVILY_API_KEY`
@@ -92,20 +106,23 @@ flowchart LR
     - `{ "query": str, "results": [{ "title": str, "content": str }], "cached": bool }`
 
 ### Paper search (free)
+
 - **GET** `/search_paper?q=...`
   - Output:
     - `{ "query": str, "results": [{ "title": str, "abstract": str }], "cached": bool }`
   - Demo-safe: lỗi → `results: []`
 
 ### RAG retrieve
+
 - **GET** `/retrieve?q=...&k=3`
   - Output:
     - `{ "query": str, "k": int, "docs": [{id,text,score,metadata}], "cached": bool }`
 
 ### Orchestration run (single)
+
 - **POST** `/run`
   - Input:
-    - `{ "q": "..." }`
+    - `{ "q": "...", "session_id": "optional" }`
   - Behavior:
     - invoke full LangGraph pipeline (planner flow)
     - capture stdout logs
@@ -113,9 +130,10 @@ flowchart LR
     - `{ query, plan, web_results, papers, context, answer, errors, observations, logs }`
 
 ### Compare multiple patterns (NEW)
+
 - **POST** `/run_compare`
   - Input:
-    - `{ "query": str, "patterns": ["react","planner","rewoo"] }`
+    - `{ "query": str, "patterns": ["react","planner","rewoo"], "session_id": "optional" }`
   - Output:
     - `{ "query": str, "results": { pattern: { answer, plan, errors, observations, logs } } }`
   - Logs:
@@ -123,6 +141,7 @@ flowchart LR
     - `[History] Saved`
 
 ### Research DB cache (SQLite)
+
 - **POST** `/save_papers`
   - Input: `{ "papers": [{ "title", "abstract", "source" }] }`
   - Output: `{ "inserted": n, "ignored": m }`
@@ -134,6 +153,7 @@ flowchart LR
   - Logs: `[DB Query] ...`
 
 ### History (SQLite)
+
 - **GET** `/history`
   - Output:
     - `[{ "query": "...", "pattern": "...", "answer": "...", "time": "..." }]` (last 20)
@@ -147,38 +167,88 @@ flowchart LR
 ```mermaid
 flowchart LR
   start[Start_state:query] --> planner[planner_node]
-  planner --> router[route_node]
+  planner --> memLoad[load_memory_node]
+  memLoad --> memPlan[memory_planner_node]
+  memPlan --> router[route_node]
   router -->|fast_path| fast[fast_path_node]
+  router -->|hybrid_path| hybrid[hybrid_path_node]
   router -->|research_path| research[research_node]
   fast --> rag[rag_node]
+  hybrid --> research
   research --> rag
-  rag --> compress[context_compress_node]
-  compress --> synth[synth_node]
+  rag --> memRag[memory_rag_node]
+  memRag --> synth[synth_node]
   synth --> critic[critic_node]
   critic -->|retry_rag (bounded)| rag
-  critic -->|end| endNode[Answer]
+  critic -->|retry_research (bounded)| research
+  critic -->|end| memStore[store_memory_node]
+  memStore --> endNode[Answer]
 ```
 
 - `planner_node`: tạo `plan` và log `[Planner]`
+- `memory_planner_node`: memory-aware planning (dựa vào `memory_quality` + `memory_conflict` + `memory_sufficient`)
 - `route_node`: heuristic routing để giảm tool calls không cần thiết
+- `route_node` (uncertainty-aware):
+  - nếu `memory_conflict=True` → force `research_path`
+  - nếu `memory_quality` cao + follow-up → `fast_path`
+  - nếu `memory_quality` vừa → `hybrid_path` (memory + selective search)
 - `fast_path_node`: skip web/paper live calls (giữ schema ổn định cho downstream)
+- `hybrid_path_node`: tạo `search_query` (query refinement) + `research_policy` (bounded/selective tools)
 - `research_node`: bounded ReAct + DB cache + ghi `errors/observations` (demo-safe)
 - `rag_node`: lấy docs từ Chroma
-- `context_compress_node`: nén docs thành `context: str` để giảm prompt bloat
+- `load_memory_node`: load history + memory_hits theo `session_id`
+  - load short-term history: last 5 messages từ SQLite `chat_messages`
+  - build search query: `state["query"] + last_user_messages`
+  - retrieve `memory_hits` từ Chroma (filter theo `session_id`) + include similarity score
+  - compute per memory:
+    - `recency = exp(-time_diff / tau)`
+    - `usage_score = log(1 + usage_count)`
+    - `final_score = 0.4*similarity + 0.2*recency + 0.3*importance + 0.1*usage_score`
+  - sort by `final_score`, keep top-k (3–5)
+  - set state:
+    - `memory_topk` = number selected
+    - `memory_quality` = avg(`final_score`)
+    - `memory_sufficient` = `memory_quality > 0.6`
+  - detect `memory_conflict`:
+    - contradictory keywords heuristic OR low similarity variance
+- `memory_rag_node`: inject context có cấu trúc rõ ràng:
+  - `[Conversation History]`
+  - `[Relevant Past Knowledge]`
+  - `[Retrieved Documents]`
 - `synth_node`: gọi OpenRouter hoặc fallback (có `context`)
-- `critic_node`: guardrail + bounded retry (1 pass) nếu thiếu sources/docs
+- `critic_node`: guardrail + bounded retry
+  - no sources → `retry_research`
+  - `memory_conflict=True` → `retry_research`
+  - low-signal answer:
+    - `memory_quality` thấp → `retry_research`
+    - `memory_quality` vừa/cao → `retry_rag`
+- `store_memory_node`: lưu `query` + `answer` vào SQLite history và ghi long-term memory (best-effort)
+  - ALWAYS `save_message(session_id,"user",query)` và `save_message(session_id,"assistant",answer)` (nếu có answer)
+  - long-term memory store ONLY khi:
+    - `len(answer) > 100`
+    - answer không rỗng
+    - query không phải greeting
+  - stored payload:
+    - full answer
+    - `summary` = 2 câu đầu tiên
+  - stored metadata:
+    - `importance` (0..1), `usage_count`, `created_at`, `last_used`, `type`
+  - usage tracking:
+    - increment `usage_count` và update `last_used` cho memories đã được dùng trong run
 
 ### 5.2 ReAct pattern (no planner node)
 
 ```mermaid
 flowchart LR
-  start[Start_state:query] --> research[research_node]
+  start[Start_state:query] --> memLoad[load_memory_node]
+  memLoad --> research[research_node]
   research --> rag[rag_node]
-  rag --> compress[context_compress_node]
-  compress --> synth[synth_node]
+  rag --> memRag[memory_rag_node]
+  memRag --> synth[synth_node]
   synth --> critic[critic_node]
   critic -->|retry_rag (bounded)| rag
-  critic -->|end| endNode[Answer]
+  critic -->|end| memStore[store_memory_node]
+  memStore --> endNode[Answer]
 ```
 
 Mục tiêu: rút gọn, nhanh, tập trung tool-use.
@@ -188,33 +258,45 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
 ## 6) DB & persistence
 
 ### 6.1 SQLite path
+
 - Mặc định: `/app/data/research.db` (env: `RESEARCH_DB_PATH`)
 - Docker: mount volume vào `/app/data` để persist
 
 ### 6.2 Schema
 
 #### papers
+
 - id, title, abstract, source, created_at
 - Unique index theo `title` để dedupe.
 
 #### history
+
 - id, query, pattern, answer, created_at
 - Dùng để phân tích so sánh outputs theo pattern.
 
 #### tool_cache (NEW)
+
 - tool, query, response_json, created_at
 - Unique index theo (tool, query)
 - TTL logic đơn giản (env: `TOOL_CACHE_TTL_SECONDS`)
+
+#### chat_messages (NEW)
+
+- session_id, role, content, created_at
+- Lưu hội thoại theo session; loader chỉ lấy last N (3–5) để inject vào prompt
 
 ---
 
 ## 7) RAG & Embeddings
 
 ### 7.1 Chroma
+
 - Persist dir: `CHROMA_PERSIST_DIR` (default `/app/chroma_db`)
 - Collection: `research_assistant_docs_hf_minilm_l6_v2`
+- Memory collection: `research_assistant_memory` (scoped theo `session_id`)
 
 ### 7.2 Embeddings
+
 - Model: `sentence-transformers/all-MiniLM-L6-v2`
 - Cache model: `/app/cache`
 - Optional auth:
@@ -243,6 +325,7 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
 ## 10) Docker services & ports
 
 ### Services (docker-compose.yml)
+
 - `mcp`:
   - host: `localhost:8001` → container `8000`
   - volumes:
@@ -258,4 +341,25 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
 
 ## 11) Demo checklist nhanh
 
-1. `docker-compose up --build`\n2. Mở UI: `http://localhost:8501`\n3. Chọn patterns (`react`, `planner`, `rewoo`) → Run\n4. Xem compare outputs + logs\n5. Xem History (last 20)\n6. Chạy lại cùng query → DB cache giúp reuse papers nhanh hơn\n+
+1. `docker-compose up --build`\n2. Mở UI: `http://localhost:8501`\n3. Chọn patterns (`react`, `planner`, `rewoo`) → Run\n4. Xem compare outputs + logs\n5. Xem History (last 20)\n6. Chạy lại cùng query → DB cache giúp reuse papers nhanh hơn
+
+---
+
+## 12) Graph Viewer (Streamlit execution visualization)
+
+UI có thêm tab **Graph Viewer**:
+
+- **Graph visualization**: dùng `streamlit-agraph` để render nodes + edges theo LangGraph pipeline.
+- **Node highlighting**:
+  - active node: đỏ
+  - completed nodes: xanh
+  - pending nodes: xám
+- **Live mode**:
+  - chạy local LangGraph `app.stream(inputs)` bên trong Streamlit
+  - update graph + logs theo từng event `{node, status=start|end, data}`
+- **Replay mode**:
+  - chạy từ `trace` (mock/saved) và simulate delay để demo
+- **Panels**:
+  - Left: graph
+  - Right-top: execution logs (scrollable)
+  - Right-bottom: decision panel (`memory_quality`, `memory_conflict`, `route`)

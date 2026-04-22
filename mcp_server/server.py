@@ -339,19 +339,38 @@ def _tool_cache_set(tool: str, q: str, response: Dict[str, Any]) -> None:
 def _build_react_graph():
     from langgraph.graph import END, StateGraph
 
+    from agents.critic import critic_node
+    from agents.memory_nodes import load_memory_node, memory_rag_node, store_memory_node
     from agents.rag_agent import rag_node
     from agents.research_agent import research_node
     from agents.synth_agent import synth_node
 
-    # Minimal react-style graph: research -> rag -> synth (no planner node).
+    # Minimal react-style graph (still bounded & demo-safe):
+    # load_memory -> research -> rag -> memory_rag -> synth -> critic -> store_memory
     g = StateGraph(dict)
+    g.add_node("load_memory", load_memory_node)
     g.add_node("research_agent", research_node)
     g.add_node("rag_agent", rag_node)
+    g.add_node("memory_rag", memory_rag_node)
     g.add_node("synth_agent", synth_node)
-    g.set_entry_point("research_agent")
+    g.add_node("critic", critic_node)
+    g.add_node("store_memory", store_memory_node)
+    g.set_entry_point("load_memory")
+    g.add_edge("load_memory", "research_agent")
     g.add_edge("research_agent", "rag_agent")
-    g.add_edge("rag_agent", "synth_agent")
-    g.add_edge("synth_agent", END)
+    g.add_edge("rag_agent", "memory_rag")
+    g.add_edge("memory_rag", "synth_agent")
+    g.add_edge("synth_agent", "critic")
+    g.add_conditional_edges(
+        "critic",
+        lambda s: str(s.get("critic_route") or "end"),
+        {
+            "retry_rag": "rag_agent",
+            "retry_research": "research_agent",
+            "end": "store_memory",
+        },
+    )
+    g.add_edge("store_memory", END)
     return g.compile()
 
 
@@ -390,6 +409,7 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     and captures stdout logs for display.
     """
     q = str((payload or {}).get("q") or "").strip()
+    session_id = str((payload or {}).get("session_id") or "").strip()
     if not q:
         return {
             "query": q,
@@ -406,7 +426,7 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         with contextlib.redirect_stdout(buf):
             graph = _get_graph("planner")
             state = graph.invoke(
-                {"query": q},
+                {"query": q, "session_id": session_id, "pattern": "planner"},
                 config={
                     "tags": ["demo", "ui", "langgraph", "research-assistant"],
                     "metadata": {"step_type": "full_run"},
@@ -464,6 +484,7 @@ def query_papers(q: str = Query(..., min_length=1)) -> List[Dict[str, str]]:
 @app.post("/run_compare")
 def run_compare(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     query = str((payload or {}).get("query") or "").strip()
+    session_id = str((payload or {}).get("session_id") or "").strip()
     patterns = (payload or {}).get("patterns") or []
     if not isinstance(patterns, list):
         patterns = []
@@ -488,10 +509,10 @@ def run_compare(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
                     plan = []
 
                 state = graph.invoke(
-                    {"query": query, "plan": plan},
+                    {"query": query, "plan": plan, "session_id": session_id, "pattern": pattern},
                     config={
                         "tags": ["demo", "compare", "langgraph", "research-assistant", pattern],
-                        "metadata": {"pattern": pattern},
+                        "metadata": {"pattern": pattern, "session_id": session_id},
                     },
                 )
             answer = str(state.get("answer") or "")

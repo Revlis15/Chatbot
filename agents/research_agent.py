@@ -9,6 +9,7 @@ def run_react_research(
     query: str,
     *,
     max_steps: int = 4,
+    tools: List[str] | None = None,
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Bounded ReAct-style research loop (no LLM policy yet).
@@ -23,8 +24,11 @@ def run_react_research(
     errors: List[Dict[str, Any]] = []
     observations: List[Dict[str, Any]] = []
 
-    # Bounded attempts: web then paper, optionally repeat if empty.
-    candidates = ["search_web", "search_paper", "search_web", "search_paper"][:max_steps]
+    # Bounded attempts: default web then paper, optionally repeat if empty.
+    if tools:
+        candidates = list(tools)[:max_steps]
+    else:
+        candidates = ["search_web", "search_paper", "search_web", "search_paper"][:max_steps]
     for step_idx, tool_name in enumerate(candidates, start=1):
         # stop early if we already have something from both channels
         if web_results and paper_results:
@@ -70,6 +74,13 @@ def research_node(state: Dict[str, Any]) -> Dict[str, Any]:
     query = str(state.get("query") or "").strip()
     if not query:
         return {"query": query, "web_results": [], "papers": [], "db_papers": [], "errors": [], "observations": []}
+    # Optional refined query for tool calls (hybrid path).
+    search_query = str(state.get("search_query") or "").strip() or query
+    policy = state.get("research_policy") or {}
+    max_steps = int(policy.get("max_steps") or 4) if isinstance(policy, dict) else 4
+    tools = policy.get("tools") if isinstance(policy, dict) else None
+    if tools is not None and not isinstance(tools, list):
+        tools = None
     tc = ToolClient()
     errors: List[Dict[str, Any]] = list(state.get("errors") or [])
     observations: List[Dict[str, Any]] = list(state.get("observations") or [])
@@ -100,7 +111,7 @@ def research_node(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     # 2) Continue normal research flow.
-    web_results, papers, react_errors, react_obs = run_react_research(query, max_steps=4)
+    web_results, papers, react_errors, react_obs = run_react_research(search_query, max_steps=max_steps, tools=tools)
     errors.extend(react_errors)
     observations.extend(react_obs)
 

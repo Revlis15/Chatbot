@@ -5,7 +5,7 @@ This repository contains:
 - **`app`**: LangGraph orchestrator + agents that call MCP (via a `ToolClient` abstraction)
 - **`ui`**: Streamlit demo UI (compare patterns + history)
 - **Chroma** persistence via a Docker named volume
-- **SQLite** persistence via a Docker named volume (`papers`, `history`, `tool_cache`)
+- **SQLite** persistence via a Docker named volume (`papers`, `history`, `tool_cache`, `chat_messages`)
 
 ## What’s included (demo-safe stack)
 
@@ -17,10 +17,34 @@ This repository contains:
   - cached under **`/app/cache`** in Docker
 - **LLM**: OpenRouter (if configured) with a guaranteed fallback response
 - **Adaptive graph**:
-  - heuristic **router** (`fast_path` vs `research_path`) to reduce unnecessary tool calls
+  - heuristic **router** (`fast_path` / `hybrid_path` / `research_path`) to reduce unnecessary tool calls
   - bounded **critic** retry (1 extra RAG pass) before returning a final answer
 - **Observability**:
-  - structured `errors` + `observations` attached to runs (surfaced in UI)
+  - structured `errors` + `observations` attached to runs (available in API responses)
+- **Session memory (NEW)**:
+  - short-term memory: SQLite chat history (`chat_messages`)
+  - long-term memory: Chroma collection `research_assistant_memory`
+  - optional `session_id` can be passed to `/run` and `/run_compare` (backward compatible)
+  - memory retrieval query: `query + last user messages` (from last 5 turns)
+  - memory ranking (importance + usage aware):
+    - per-memory `final_score = 0.4*similarity + 0.2*recency + 0.3*importance + 0.1*log(1+usage_count)`
+    - memories are sorted by `final_score` and truncated to top-k (3–5)
+    - `memory_quality`: average `final_score` of the selected memories
+    - `memory_sufficient`: `memory_quality > 0.6`
+  - derived routing signals (STRICT):
+    - `memory_conflict`: simple contradiction / low-variance heuristic
+  - storage rules:
+    - store ONLY when `len(answer) > 100`, answer not empty, and query is not a greeting
+    - stored memory includes full answer + `summary` (first 2 sentences)
+    - stored metadata includes: `importance`, `usage_count`, `created_at`, `last_used`, `type`
+- **Graph viewer (NEW)**:
+  - Streamlit execution viewer with graph visualization (nodes/edges + active/completed/pending highlight)
+  - Live mode: runs local LangGraph `app.stream()` to show step-by-step execution
+  - Replay mode: simulates execution from a saved/mock trace
+  - Panels:
+    - Graph (left)
+    - Execution logs (right-top)
+    - Decision panel (right-bottom): `memory_quality`, `memory_conflict`, `route`
 
 ## Project layout
 
@@ -29,7 +53,7 @@ This repository contains:
 ├── agents/
 │   ├── router.py            # heuristic router (fast_path vs research_path)
 │   ├── critic.py            # guardrail + bounded retry signal
-│   ├── context_compress.py  # rule-based context compression
+│   ├── memory_nodes.py      # load_memory / memory_rag / store_memory
 ├── app/                # Dockerfile only
 ├── graph/
 ├── mcp_client/
@@ -37,6 +61,9 @@ This repository contains:
 ├── rag/
 ├── docker-compose.yml
 ├── main.py
+├── session_manager.py
+├── memory_store.py
+├── ui_graph.py
 ├── requirements.txt
 └── .env.example
 ```
@@ -61,6 +88,9 @@ Supported variables:
 - **`MCP_CACHE_TTL_SECONDS`**: optional; in-memory TTL cache in MCP (default `300`)
 - **`CHROMA_PERSIST_DIR`**: optional; defaults to `/app/chroma_db`
 - **`RAG_CHUNK_MAX_CHARS`**: optional; chunk size for seed docs (default `360`)
+ 
+UI dependency:
+- **`streamlit-agraph`**: graph visualization in `ui_graph.py`
 
 ## Run with Docker Compose
 
@@ -152,4 +182,22 @@ You can provide a HuggingFace token to improve model download reliability/speed 
 - Recommended: set `HF_HUB_DISABLE_TELEMETRY=1`
 
 If `HF_TOKEN` is not set, the system uses public access and still works normally.
+
+## Session-aware usage (optional)
+
+The UI does not send `session_id` yet (by design). For session memory, call the API directly:
+
+```bash
+curl -X POST http://localhost:8001/run ^
+  -H "Content-Type: application/json" ^
+  -d "{\"q\":\"What did we decide last time?\",\"session_id\":\"demo-session-1\"}"
+```
+
+For compare:
+
+```bash
+curl -X POST http://localhost:8001/run_compare ^
+  -H "Content-Type: application/json" ^
+  -d "{\"query\":\"Continue based on our last answer\",\"patterns\":[\"planner\",\"react\"],\"session_id\":\"demo-session-1\"}"
+```
 

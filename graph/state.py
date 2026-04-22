@@ -1,60 +1,31 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal, Optional, TypedDict
-
-
-class WebResult(TypedDict, total=False):
-    title: str
-    content: str
-    url: str
-    provider: str
-
-
-class Paper(TypedDict, total=False):
-    title: str
-    abstract: str
-    source: str
-    url: str
-    year: int
-
-
-class Doc(TypedDict, total=False):
-    id: str
-    text: str
-    score: float
-    metadata: Dict[str, Any]
-
-
-class Observation(TypedDict, total=False):
-    step: str
-    tool: str
-    input: str
-    output_size: int
-    ok: bool
-    note: str
+from typing import TypedDict
 
 
 class GraphState(TypedDict, total=False):
-    # Required invariant: must always exist (best-effort enforced by nodes)
     query: str
+    session_id: str | None
 
-    # Pattern and plan
-    pattern: Literal["planner", "react", "rewoo"]
-    plan: List[str]
+    # memory inputs
+    history: list[dict]
+    memory_hits: list[dict]
 
-    # Research results
-    web_results: List[WebResult]
-    papers: List[Paper]
-    db_papers: List[Paper]
+    # memory scoring
+    memory_topk: int
+    memory_coverage: int
+    memory_quality: float
+    memory_conflict: bool
+    memory_sufficient: bool
 
-    # RAG
-    docs: List[Doc]
-    context: Optional[str]
+    # planning
+    plan: list[str]
 
-    # Output
+    # outputs
+    context: str
     answer: str
 
-    # Reliability / observability
-    errors: List[Dict[str, Any]]
-    observations: List[Observation]
+    # observability
+    errors: list[str]
+    observations: list[dict]
 

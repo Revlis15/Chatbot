@@ -64,6 +64,8 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
     papers: List[Dict[str, Any]] = state.get("papers", []) or []
     docs: List[Dict[str, Any]] = state.get("docs", []) or []
     context: str = str(state.get("context") or "").strip()
+    # `context` is memory-aware and structured by memory_rag_node.
+    memory_context: str = str(state.get("memory_context") or "").strip()
 
     print("[Synthesizer]")
     if not query:
@@ -72,7 +74,7 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
         [
             f"User query: {query}",
             "",
-            "Context (compressed):",
+            "Context (memory-aware):",
             (context or "(none)"),
             "",
             "Web results:",
@@ -84,7 +86,10 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
             "Retrieved docs:",
             _as_text_block(docs, fields=["id", "text", "score"], prefix="D"),
             "",
-            "Task: Provide a clean summary and a comparison table-like section (no markdown tables), and practical recommendation.",
+            "Task: You have access to previous conversation context and past findings (in the Context block).",
+            "- Detect follow-up questions and reuse past findings when relevant instead of recomputing.",
+            "- Avoid repeating previous answers verbatim; refine/extend with new details.",
+            "- Provide a clean summary and a comparison table-like section (no markdown tables), and practical recommendation.",
             "Language: Prefer Vietnamese if the query is Vietnamese.",
         ]
     )
