@@ -1,0 +1,52 @@
+services:
+  mcp:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - CHROMA_PERSIST_DIR=/app/chroma_db
+    volumes:
+      - chroma_data:/app/chroma_db
+      - research_db_data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    depends_on:
+      mcp:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - MCP_URL=http://mcp:8000
+      - START_MCP_SERVER=0
+    command: ["python", "main.py", "--mode", "planner", "--start-server", "0"]
+
+  ui:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    depends_on:
+      mcp:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      - MCP_URL=http://mcp:8000
+    command: ["streamlit", "run", "ui.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    ports:
+      - "8501:8501"
+
+volumes:
+  chroma_data:
+  research_db_data:
