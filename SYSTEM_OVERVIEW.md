@@ -62,11 +62,10 @@ flowchart LR
 │   ├── research_agent.py    # bounded ReAct loop + DB cache integration (/query_papers, /save_papers) + observations/errors
 │   ├── rag_agent.py         # gọi MCP /retrieve (via ToolClient)
 │   ├── memory_nodes.py      # load_memory / memory_rag / store_memory
-│   ├── critic.py            # guardrail + bounded retry signal (1 extra RAG pass)
 │   └── synth_agent.py       # OpenRouter -> fallback (consumes context)
 ├── graph/
 │   ├── state.py             # unified GraphState contract (TypedDict)
-│   └── build_graph.py       # graph: planner->load_memory->memory_planner->router->(fast|hybrid|research)->rag->memory_rag->synth->critic->store_memory
+│   └── build_graph.py       # graph: planner->load_memory->memory_planner->router->(fast|hybrid|research)->rag->memory_rag->synth->store_memory
 ├── mcp_server/
 │   ├── server.py            # FastAPI endpoints + SQLite + orchestration wrappers
 │   └── Dockerfile
@@ -178,10 +177,7 @@ flowchart LR
   research --> rag
   rag --> memRag[memory_rag_node]
   memRag --> synth[synth_node]
-  synth --> critic[critic_node]
-  critic -->|retry_rag (bounded)| rag
-  critic -->|retry_research (bounded)| research
-  critic -->|end| memStore[store_memory_node]
+  synth --> memStore[store_memory_node]
   memStore --> endNode[Answer]
 ```
 
@@ -216,12 +212,6 @@ flowchart LR
   - `[Relevant Past Knowledge]`
   - `[Retrieved Documents]`
 - `synth_node`: gọi OpenRouter hoặc fallback (có `context`)
-- `critic_node`: guardrail + bounded retry
-  - no sources → `retry_research`
-  - `memory_conflict=True` → `retry_research`
-  - low-signal answer:
-    - `memory_quality` thấp → `retry_research`
-    - `memory_quality` vừa/cao → `retry_rag`
 - `store_memory_node`: lưu `query` + `answer` vào SQLite history và ghi long-term memory (best-effort)
   - ALWAYS `save_message(session_id,"user",query)` và `save_message(session_id,"assistant",answer)` (nếu có answer)
   - long-term memory store ONLY khi:
@@ -245,9 +235,7 @@ flowchart LR
   research --> rag[rag_node]
   rag --> memRag[memory_rag_node]
   memRag --> synth[synth_node]
-  synth --> critic[critic_node]
-  critic -->|retry_rag (bounded)| rag
-  critic -->|end| memStore[store_memory_node]
+  synth --> memStore[store_memory_node]
   memStore --> endNode[Answer]
 ```
 

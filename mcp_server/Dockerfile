@@ -13,4 +13,6 @@ COPY . /app
 
 EXPOSE 8000
 
-CMD ["uvicorn", "mcp_server.server:app", "--host", "0.0.0.0", "--port", "8000"]
+# Use multiple workers because /run executes a graph that makes internal HTTP
+# tool calls (requests) back into this same FastAPI app.
+CMD ["uvicorn", "mcp_server.server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]

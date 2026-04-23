@@ -22,6 +22,7 @@ services:
     build:
       context: .
       dockerfile: app/Dockerfile
+    profiles: ["manual"]
     depends_on:
       mcp:
         condition: service_healthy

@@ -18,7 +18,7 @@ This repository contains:
 - **LLM**: OpenRouter (if configured) with a guaranteed fallback response
 - **Adaptive graph**:
   - heuristic **router** (`fast_path` / `hybrid_path` / `research_path`) to reduce unnecessary tool calls
-  - bounded **critic** retry (1 extra RAG pass) before returning a final answer
+  - linear pipeline after routing: RAG → synthesis → memory store (no validation retry loop)
 - **Observability**:
   - structured `errors` + `observations` attached to runs (available in API responses)
 - **Session memory (NEW)**:
@@ -52,7 +52,6 @@ This repository contains:
 .
 ├── agents/
 │   ├── router.py            # heuristic router (fast_path vs research_path)
-│   ├── critic.py            # guardrail + bounded retry signal
 │   ├── memory_nodes.py      # load_memory / memory_rag / store_memory
 ├── app/                # Dockerfile only
 ├── graph/

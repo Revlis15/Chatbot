@@ -15,7 +15,27 @@ def _mcp_url() -> str:
 
 def _post_run(query: str) -> Dict[str, Any]:
     url = f"{_mcp_url()}/run"
-    resp = requests.post(url, json={"q": query}, timeout=60)
+    resp = requests.post(url, json={"q": query}, timeout=180)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _post_run_with_session(query: str, session_id: str | None) -> Dict[str, Any]:
+    url = f"{_mcp_url()}/run"
+    payload: Dict[str, Any] = {"q": query}
+    if session_id:
+        payload["session_id"] = session_id
+    resp = requests.post(url, json=payload, timeout=180)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _post_run_with_session_and_pattern(query: str, session_id: str | None, pattern: str) -> Dict[str, Any]:
+    url = f"{_mcp_url()}/run"
+    payload: Dict[str, Any] = {"q": query, "pattern": str(pattern or "planner").strip().lower()}
+    if session_id:
+        payload["session_id"] = session_id
+    resp = requests.post(url, json=payload, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
@@ -23,6 +43,16 @@ def _post_run(query: str) -> Dict[str, Any]:
 def _post_run_compare(query: str, patterns: List[str]) -> Dict[str, Any]:
     url = f"{_mcp_url()}/run_compare"
     resp = requests.post(url, json={"query": query, "patterns": patterns}, timeout=180)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _post_run_compare_with_session(query: str, patterns: List[str], session_id: str | None) -> Dict[str, Any]:
+    url = f"{_mcp_url()}/run_compare"
+    payload: Dict[str, Any] = {"query": query, "patterns": patterns}
+    if session_id:
+        payload["session_id"] = session_id
+    resp = requests.post(url, json=payload, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
@@ -49,6 +79,7 @@ tab_compare, tab_graph = st.tabs(["Compare", "Graph Viewer"])
 
 with tab_compare:
     query = st.text_input("Query", value="So sánh YOLOv8 và Faster R-CNN mới nhất")
+    session_id = st.text_input("session_id (optional)", value="demo-session-1")
     patterns = st.multiselect(
         "Patterns",
         options=["react", "planner", "rewoo"],
@@ -59,12 +90,18 @@ with tab_compare:
     if run:
         if not query.strip():
             st.warning("Please enter a query.")
-        elif not patterns:
-            st.warning("Please select at least one pattern.")
         else:
+            # If user selects nothing, default to planner.
+            patterns = patterns if patterns else ["planner"]
             with st.spinner("Running patterns..."):
                 try:
-                    data = _post_run_compare(query.strip(), patterns)
+                    sid = session_id.strip() or None
+                    if len(patterns) == 1:
+                        # Fast path: single pattern uses /run (graph pattern is handled server-side)
+                        single = _post_run_with_session_and_pattern(query.strip(), sid, patterns[0])
+                        data = {"query": query.strip(), "results": {patterns[0]: single}}
+                    else:
+                        data = _post_run_compare_with_session(query.strip(), patterns, sid)
                 except Exception as e:
                     st.error(f"API call failed: {type(e).__name__}: {e}")
                     st.stop()
@@ -93,7 +130,7 @@ with tab_compare:
                     st.subheader("✅ Answer")
                     ans = str(r.get("answer") or "").strip()
                     if ans:
-                        st.success(_truncate(ans, 1200))
+                        st.success(ans)
                     else:
                         st.warning("No answer returned.")
 

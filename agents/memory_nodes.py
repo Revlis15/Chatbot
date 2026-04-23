@@ -385,7 +385,13 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     if not session_id:
         observations.append({"step": "memory_store", "ok": True, "note": "no_session"})
-        return {"query": query, "errors": errors, "observations": observations}
+        return {
+            "query": query,
+            "answer": answer,
+            "synth_failed": bool(state.get("synth_failed") or False),
+            "errors": errors,
+            "observations": observations,
+        }
 
     # Save short-term messages (SQLite)
     try:
@@ -445,5 +451,13 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
         errors.append(f"vector_write_failed:{type(e).__name__}")
         observations.append({"step": "memory_write_vector", "ok": False, "note": "failed"})
 
-    return {"query": query, "errors": errors, "observations": observations}
+    # IMPORTANT: return `answer` so downstream/UI can always read it, even when
+    # `store_memory_node` is the final node in a graph variant (e.g., react).
+    return {
+        "query": query,
+        "answer": answer,
+        "synth_failed": bool(state.get("synth_failed") or False),
+        "errors": errors,
+        "observations": observations,
+    }
 

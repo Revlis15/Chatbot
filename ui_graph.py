@@ -28,7 +28,6 @@ PIPELINE_NODES: List[Tuple[str, str]] = [
     ("rag_agent", "📚 rag"),
     ("memory_rag", "🧩 memory_rag"),
     ("synth_agent", "✍️ synth"),
-    ("critic", "🛡️ critic"),
     ("store_memory", "💾 memory_store"),
 ]
 
@@ -43,8 +42,7 @@ PIPELINE_EDGES: List[Tuple[str, str]] = [
     ("research_agent", "rag_agent"),
     ("rag_agent", "memory_rag"),
     ("memory_rag", "synth_agent"),
-    ("synth_agent", "critic"),
-    ("critic", "store_memory"),
+    ("synth_agent", "store_memory"),
 ]
 
 
@@ -84,7 +82,7 @@ def render_graph(
     *,
     graph_state: Dict[str, NodeStatus],
     height: int = 440,
-    key: str = "agraph",
+    render_id: int = 0,
 ) -> None:
     nodes: List[Node] = []
     for node_id, label in PIPELINE_NODES:
@@ -102,7 +100,10 @@ def render_graph(
 
     cfg = Config(
         width="100%",
-        height=height,
+        # If `streamlit-agraph` doesn't support `key=`, Streamlit will auto-generate
+        # component IDs from the args. When we re-render repeatedly in a loop, we
+        # must ensure args differ to avoid StreamlitDuplicateElementId.
+        height=int(height) + (int(render_id) % 2),
         directed=True,
         physics=False,
         hierarchical=True,
@@ -110,13 +111,29 @@ def render_graph(
         highlightColor="#F7A7A6",
         collapsible=False,
     )
-    agraph(nodes=nodes, edges=edges, config=cfg, key=key)
+    # Prefer `key=` when available (newer streamlit-agraph). Fallback: rely on the
+    # salted config above so the auto-generated ID changes per render.
+    try:
+        agraph(nodes=nodes, edges=edges, config=cfg, key=f"agraph_{int(render_id)}")
+    except TypeError:
+        agraph(nodes=nodes, edges=edges, config=cfg)
 
 
-def render_logs(log_lines: List[str], *, height: int = 260) -> None:
-    # Scrollable log area without flicker.
+def render_logs(
+    log_lines: List[str],
+    *,
+    height: int = 260,
+    slot: Any | None = None,
+) -> None:
+    """
+    Render execution logs.
+    Use a non-widget renderer (`st.code`) so it can be updated repeatedly
+    inside loops without triggering StreamlitDuplicateElementKey.
+    """
     text = "\n".join(log_lines[-400:])
-    st.text_area("Execution logs", value=text, height=height, key="exec_logs", disabled=True)
+    target = slot if slot is not None else st
+    # `st.code` doesn't support height, but avoids duplicate widget keys.
+    target.code(text or "(no logs)", language="text")
 
 
 def render_decision_panel(state: Dict[str, Any]) -> None:
@@ -127,6 +144,15 @@ def render_decision_panel(state: Dict[str, Any]) -> None:
     st.metric("memory_quality", f"{mem_quality:.3f}")
     st.write(f"memory_conflict: `{mem_conflict}`")
     st.write(f"route: `{route or '(unknown)'}`")
+    st.divider()
+    st.subheader("Answer (latest)")
+    ans = str(state.get("answer") or "").strip()
+    synth_failed = bool(state.get("synth_failed") or False)
+    st.write(f"synth_failed: `{synth_failed}`")
+    if ans:
+        st.code(ans, language="text")
+    else:
+        st.info("(answer not captured yet)")
 
 
 def _extract_node_from_stream_chunk(chunk: Any) -> Optional[str]:
@@ -180,11 +206,12 @@ def mock_trace_example() -> List[Dict[str, Any]]:
     return [
         {"node": "planner", "message": "Plan generated: ['search_web','search_paper','retrieve','synthesize']"},
         {"node": "load_memory", "message": "Loaded history + retrieved memories", "state": {"memory_quality": 0.72, "memory_conflict": False}},
+        {"node": "memory_planner", "message": "Adjusted plan from memory signals"},
         {"node": "router", "message": "route=hybrid_path", "state": {"route": "hybrid_path"}},
         {"node": "research_agent", "message": "Web/paper search complete"},
         {"node": "rag_agent", "message": "Retrieved 3 docs"},
+        {"node": "memory_rag", "message": "Built memory-aware context"},
         {"node": "synth_agent", "message": "Drafted answer"},
-        {"node": "critic", "message": "Accepted"},
         {"node": "store_memory", "message": "Stored memory + updated usage"},
     ]
 
@@ -208,6 +235,8 @@ def render_execution_viewer(
         st.session_state.gv_logs = []
     if "gv_state" not in st.session_state:
         st.session_state.gv_state = {}
+    if "gv_render_id" not in st.session_state:
+        st.session_state.gv_render_id = 0
 
     left, right = st.columns([0.52, 0.48], gap="large")
 
@@ -235,10 +264,11 @@ def render_execution_viewer(
             completed_nodes=st.session_state.gv_completed,
         )
         with gph:
-            render_graph(graph_state=graph_state, key="agraph_main")
+            render_graph(graph_state=graph_state, render_id=int(st.session_state.gv_render_id))
 
     with top:
-        render_logs(st.session_state.gv_logs)
+        logs_slot = st.empty()
+        render_logs(st.session_state.gv_logs, slot=logs_slot)
 
     with bottom:
         st.subheader("Decision panel")
@@ -269,7 +299,7 @@ def render_execution_viewer(
                 st.session_state.gv_state.update(st_candidate)
             else:
                 # best effort: if chunk looks like state delta
-                for k in ("memory_quality", "memory_conflict", "route"):
+                for k in ("memory_quality", "memory_conflict", "route", "answer", "synth_failed"):
                     if k in data:
                         st.session_state.gv_state[k] = data.get(k)
 
@@ -287,14 +317,15 @@ def render_execution_viewer(
 
         # Re-render panels smoothly
         with left:
+            st.session_state.gv_render_id = int(st.session_state.gv_render_id) + 1
             graph_state = update_graph_state(
                 current_node=st.session_state.gv_current,
                 completed_nodes=st.session_state.gv_completed,
             )
             with gph:
-                render_graph(graph_state=graph_state, key="agraph_main")
+                render_graph(graph_state=graph_state, render_id=int(st.session_state.gv_render_id))
         with top:
-            render_logs(st.session_state.gv_logs)
+            render_logs(st.session_state.gv_logs, slot=logs_slot)
         with bottom:
             st.subheader("Decision panel")
             render_decision_panel(st.session_state.gv_state)

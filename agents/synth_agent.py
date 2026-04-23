@@ -69,7 +69,7 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
     print("[Synthesizer]")
     if not query:
-        return {"answer": _fallback_answer()}
+        return {"answer": _fallback_answer(), "synth_failed": True}
     prompt = "\n".join(
         [
             f"User query: {query}",
@@ -97,8 +97,9 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
     llm_answer = call_openrouter(prompt)
     if llm_answer:
         answer = llm_answer.strip()
-    else:
-        # Demo-safe fallback (required).
-        answer = _fallback_answer()
-    return {"answer": answer}
+        return {"answer": answer, "synth_failed": False}
+
+    # Demo-safe fallback (required), plus a failure flag for observability.
+    answer = _fallback_answer()
+    return {"answer": answer, "synth_failed": True}
 

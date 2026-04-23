@@ -339,37 +339,26 @@ def _tool_cache_set(tool: str, q: str, response: Dict[str, Any]) -> None:
 def _build_react_graph():
     from langgraph.graph import END, StateGraph
 
-    from agents.critic import critic_node
     from agents.memory_nodes import load_memory_node, memory_rag_node, store_memory_node
     from agents.rag_agent import rag_node
     from agents.research_agent import research_node
     from agents.synth_agent import synth_node
 
     # Minimal react-style graph (still bounded & demo-safe):
-    # load_memory -> research -> rag -> memory_rag -> synth -> critic -> store_memory
+    # load_memory -> research -> rag -> memory_rag -> synth -> store_memory
     g = StateGraph(dict)
     g.add_node("load_memory", load_memory_node)
     g.add_node("research_agent", research_node)
     g.add_node("rag_agent", rag_node)
     g.add_node("memory_rag", memory_rag_node)
     g.add_node("synth_agent", synth_node)
-    g.add_node("critic", critic_node)
     g.add_node("store_memory", store_memory_node)
     g.set_entry_point("load_memory")
     g.add_edge("load_memory", "research_agent")
     g.add_edge("research_agent", "rag_agent")
     g.add_edge("rag_agent", "memory_rag")
     g.add_edge("memory_rag", "synth_agent")
-    g.add_edge("synth_agent", "critic")
-    g.add_conditional_edges(
-        "critic",
-        lambda s: str(s.get("critic_route") or "end"),
-        {
-            "retry_rag": "rag_agent",
-            "retry_research": "research_agent",
-            "end": "store_memory",
-        },
-    )
+    g.add_edge("synth_agent", "store_memory")
     g.add_edge("store_memory", END)
     return g.compile()
 
@@ -410,9 +399,15 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """
     q = str((payload or {}).get("q") or "").strip()
     session_id = str((payload or {}).get("session_id") or "").strip()
+    pattern_raw = str((payload or {}).get("pattern") or "").strip().lower()
+    # If caller doesn't choose a pattern (missing/blank), default to planner.
+    # If caller sends an unknown pattern, also default to planner for safety.
+    allowed = {"planner", "rewoo", "react"}
+    pattern = pattern_raw if pattern_raw in allowed else "planner"
     if not q:
         return {
             "query": q,
+            "pattern": pattern,
             "plan": [],
             "web_results": [],
             "papers": [],
@@ -424,12 +419,12 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            graph = _get_graph("planner")
+            graph = _get_graph(pattern)
             state = graph.invoke(
-                {"query": q, "session_id": session_id, "pattern": "planner"},
+                {"query": q, "session_id": session_id, "pattern": pattern},
                 config={
-                    "tags": ["demo", "ui", "langgraph", "research-assistant"],
-                    "metadata": {"step_type": "full_run"},
+                    "tags": ["demo", "ui", "langgraph", "research-assistant", pattern],
+                    "metadata": {"step_type": "full_run", "pattern": pattern, "session_id": session_id},
                 },
             )
 
@@ -438,6 +433,7 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
         return {
             "query": q,
+            "pattern": pattern,
             "plan": state.get("plan") or [],
             "web_results": state.get("web_results") or [],
             "papers": state.get("papers") or [],
@@ -526,7 +522,7 @@ def run_compare(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
             _db_save_history(query=query, pattern=pattern, answer=answer)
         except Exception as e:
             logs = buf.getvalue()
-            logs += f"\n[Compare] ERROR: {type(e).__name__}\n"
+            logs += f"\n[Compare] ERROR: {type(e).__name__}: {e}\n"
             results[pattern] = {"answer": "", "plan": [], "errors": [], "observations": [], "logs": logs}
             _db_save_history(query=query, pattern=pattern, answer="")
 

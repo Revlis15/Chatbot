@@ -6,6 +6,7 @@ from typing import TypedDict
 class GraphState(TypedDict, total=False):
     query: str
     session_id: str | None
+    pattern: str
 
     # memory inputs
     history: list[dict]
@@ -21,11 +22,23 @@ class GraphState(TypedDict, total=False):
     # planning
     plan: list[str]
 
+    # routing / execution
+    route: str
+    search_query: str
+    research_policy: dict
+
+    # tool outputs
+    web_results: list[dict]
+    papers: list[dict]
+    db_papers: list[dict]
+    docs: list[dict]
+
     # outputs
     context: str
     answer: str
+    synth_failed: bool
 
     # observability
-    errors: list[str]
+    errors: list[dict]
     observations: list[dict]
 

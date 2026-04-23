@@ -23,18 +23,42 @@ class HuggingFaceMiniLMEmbeddingFunction:
         self._cache_folder = cache_folder
         os.makedirs(self._cache_folder, exist_ok=True)
 
-        hf_token = os.getenv("HF_TOKEN")
+        def _set_token_env(token: Optional[str]) -> None:
+            if token:
+                os.environ["HUGGINGFACEHUB_API_TOKEN"] = token
+                os.environ.pop("HF_HUB_DISABLE_IMPLICIT_TOKEN", None)
+            else:
+                os.environ.pop("HUGGINGFACEHUB_API_TOKEN", None)
+                # Force huggingface_hub to NOT reuse cached/implicit tokens.
+                os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
+
+        hf_token = (os.getenv("HF_TOKEN") or "").strip()
         if hf_token:
-            os.environ["HUGGINGFACEHUB_API_TOKEN"] = hf_token
+            _set_token_env(hf_token)
             print("[HF] Authenticated")
         else:
+            _set_token_env(None)
             print("[HF] No token (public mode)")
 
         print("[Embedding - HF]", f"model={self._model_name}", f"cache_folder={self._cache_folder}")
 
         from langchain_huggingface import HuggingFaceEmbeddings
 
-        self._emb = HuggingFaceEmbeddings(model_name=self._model_name, cache_folder=self._cache_folder)
+        try:
+            self._emb = HuggingFaceEmbeddings(model_name=self._model_name, cache_folder=self._cache_folder)
+        except Exception as e:
+            # If a bad/expired token is present, HF can return 401 for public models.
+            # Retry once in public mode to keep the system demo-safe.
+            msg = str(e)
+            auth_like = any(s in msg.lower() for s in ["401", "unauthorized", "token", "gated", "repository not found"])
+            if hf_token and auth_like:
+                print("[HF] Auth failed; retrying public mode")
+                # Unset any token sources that libraries might pick up implicitly.
+                os.environ.pop("HF_TOKEN", None)
+                _set_token_env(None)
+                self._emb = HuggingFaceEmbeddings(model_name=self._model_name, cache_folder=self._cache_folder)
+            else:
+                raise
 
     def name(self) -> str:
         return f"hf-minilm-l6-v2::{self._model_name}"

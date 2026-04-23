@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from langgraph.graph import END, StateGraph
+try:
+    # LangGraph canonical import (most versions)
+    from langgraph.graph import END, StateGraph
+except Exception:  # pragma: no cover
+    # Fallback for older/newer layouts in some environments
+    from langgraph.graph.graph import END, StateGraph  # type: ignore
 
 from agents.planner import build_plan
-from agents.critic import critic_node
 from agents.memory_planner import memory_planner_node
 from agents.memory_nodes import load_memory_node, memory_rag_node, store_memory_node
 from agents.rag_agent import rag_node
@@ -35,7 +39,6 @@ def build_research_graph():
     g.add_node("rag_agent", rag_node)
     g.add_node("memory_rag", memory_rag_node)
     g.add_node("synth_agent", synth_node)
-    g.add_node("critic", critic_node)
     g.add_node("store_memory", store_memory_node)
 
     g.set_entry_point("planner")
@@ -56,17 +59,10 @@ def build_research_graph():
     g.add_edge("research_agent", "rag_agent")
     g.add_edge("rag_agent", "memory_rag")
     g.add_edge("memory_rag", "synth_agent")
-    g.add_edge("synth_agent", "critic")
-    g.add_conditional_edges(
-        "critic",
-        lambda s: str(s.get("critic_route") or "end"),
-        {
-            "retry_rag": "rag_agent",
-            "retry_research": "research_agent",
-            "end": "store_memory",
-        },
-    )
+    g.add_edge("synth_agent", "store_memory")
     g.add_edge("store_memory", END)
 
+    # NOTE: Some LangGraph versions don't accept compile(recursion_limit=...).
+    # Recursion limits (if needed) should be set via invoke/stream config instead.
     return g.compile()
 
