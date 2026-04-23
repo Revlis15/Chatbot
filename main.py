@@ -9,9 +9,7 @@ from typing import Any, Dict
 
 import requests
 
-from agents.planner import build_plan
-from agents.research_agent import run_react_research
-from graph.build_graph import build_research_graph
+from graph.build_graph import build_production_pipeline
 
 
 def _init_langsmith_tracing() -> None:
@@ -78,32 +76,13 @@ def _wait_for_server(base_url: str, timeout_s: int = 20) -> bool:
 
 
 def run_planner_mode(query: str) -> Dict[str, Any]:
-    app = build_research_graph()
+    app = build_production_pipeline()
     return app.invoke({"query": query}, config=_langgraph_config(mode="planner"))
 
 
-def run_react_mode(query: str) -> Dict[str, Any]:
-    print("[Planner]")
-    plan = build_plan(query)
-    print("Plan:", plan)
-
-    web_results, papers = run_react_research(query)
-    # For react-only mode, we skip RAG+synthesis graph; still return structured state.
-    return {"query": query, "plan": plan, "web_results": web_results, "papers": papers}
-
-
-def run_rewoo_mode(query: str) -> Dict[str, Any]:
-    """
-    Minimal ReWOO-like placeholder:
-    - Plan the tools
-    - Execute tools in order and pass observations forward
-    """
-    print("[Planner]")
-    plan = build_plan(query)
-    print("Plan:", plan)
-    # Reuse the graph execution as the execution engine to keep it simple.
-    app = build_research_graph()
-    return app.invoke({"query": query, "plan": plan}, config=_langgraph_config(mode="rewoo"))
+def run_pipeline_mode(query: str) -> Dict[str, Any]:
+    app = build_production_pipeline()
+    return app.invoke({"query": query}, config=_langgraph_config(mode="production"))
 
 
 def main() -> int:
@@ -114,8 +93,8 @@ def main() -> int:
     parser.add_argument(
         "--mode",
         default=os.getenv("MODE", "planner"),
-        choices=["planner", "react", "rewoo"],
-        help="planner=full LangGraph, react=research-only, rewoo=minimal placeholder",
+        choices=["production"],
+        help="production=single pipeline",
     )
     parser.add_argument(
         "--query",
@@ -141,19 +120,8 @@ def main() -> int:
             return 2
 
     try:
-        if args.mode == "planner":
-            state = run_planner_mode(args.query)
-            print("\n[Final Answer]\n")
-            print(state.get("answer", ""))
-            return 0
-        if args.mode == "react":
-            state = run_react_mode(args.query)
-            print("\n[Intermediate Outputs]\n")
-            print("web_results:", len(state.get("web_results", [])))
-            print("papers:", len(state.get("papers", [])))
-            return 0
-        if args.mode == "rewoo":
-            state = run_rewoo_mode(args.query)
+        if args.mode == "production":
+            state = run_pipeline_mode(args.query)
             print("\n[Final Answer]\n")
             print(state.get("answer", ""))
             return 0

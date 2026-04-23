@@ -13,8 +13,8 @@ Hệ thống là một **research assistant** đa tác tử (multi-agent) với:
 - **Hybrid Web Search**: Tavily (nếu có key) → fallback DuckDuckGo.
 - **Paper search**: Semantic Scholar public API (không cần key).
 - **RAG**: Chroma Vector DB + **HuggingFace embeddings** local (`all-MiniLM-L6-v2`).
-- **SQLite research cache**: lưu & truy vấn lại papers để giảm gọi API.
-- **Compare patterns**: chạy nhiều pattern trên cùng query (`react`, `planner`, `rewoo`) + lưu lịch sử.
+- **SQLite session history**: lưu hội thoại theo `session_id`.
+- **Single pipeline**: chỉ 1 LangGraph pipeline duy nhất (production).
 - **Streamlit UI** cho demo.
 - **Optional observability**: LangSmith tracing (bật khi có `LANGCHAIN_API_KEY`).
 - **Session memory (NEW)**:
@@ -34,8 +34,6 @@ flowchart LR
   mcp -->|/search_web| web[Hybrid_Web_Search]
   mcp -->|/search_paper| semsch[Semantic_Scholar]
   mcp -->|/retrieve| chroma[Chroma_Vector_DB]
-  mcp -->|/query_papers /save_papers| sqlite[SQLite_research.db]
-  mcp -->|/history| sqlite
   mcp -->|chat_messages| sqlite
   mcp -->|memory collection| chroma
 
@@ -57,15 +55,14 @@ flowchart LR
 .
 ├── agents/
 │   ├── planner.py           # tạo plan: ["search_web","search_paper","retrieve","synthesize"]
-│   ├── memory_planner.py    # memory-aware planner node (adjust plan after loading memory)
 │   ├── router.py            # heuristic router: fast_path vs research_path
-│   ├── research_agent.py    # bounded ReAct loop + DB cache integration (/query_papers, /save_papers) + observations/errors
+│   ├── research_agent.py    # simple research: one-pass web + paper
 │   ├── rag_agent.py         # gọi MCP /retrieve (via ToolClient)
 │   ├── memory_nodes.py      # load_memory / memory_rag / store_memory
 │   └── synth_agent.py       # OpenRouter -> fallback (consumes context)
 ├── graph/
 │   ├── state.py             # unified GraphState contract (TypedDict)
-│   └── build_graph.py       # graph: planner->load_memory->memory_planner->router->(fast|hybrid|research)->rag->memory_rag->synth->store_memory
+│   └── build_graph.py       # production pipeline: planner->load_memory->router->(fast|research)->rag->memory_rag->synth->store_memory
 ├── mcp_server/
 │   ├── server.py            # FastAPI endpoints + SQLite + orchestration wrappers
 │   └── Dockerfile
@@ -77,9 +74,9 @@ flowchart LR
 │   └── chunking.py          # deterministic rule-based chunker
 ├── session_manager.py       # SQLite session history (chat_messages)
 ├── memory_store.py          # Chroma-based long-term memory store (scoped by session_id)
-├── ui.py                    # Streamlit demo UI (compare + history)
+├── ui.py                    # Streamlit demo UI (single pipeline)
 ├── ui_graph.py              # (removed; previously Streamlit graph viewer)
-├── main.py                  # CLI runner (planner/react/rewoo), optional LangSmith
+├── main.py                  # CLI runner (production pipeline), optional LangSmith
 ├── docker-compose.yml       # services: mcp, app, ui + volumes
 ├── requirements.txt
 ├── .env.example
@@ -121,59 +118,27 @@ flowchart LR
 
 - **POST** `/run`
   - Input:
-    - `{ "q": "...", "session_id": "optional", "pattern": "optional (planner|rewoo|react)" }`
+    - `{ "q": "...", "session_id": "optional" }`
   - Behavior:
-    - invoke LangGraph pipeline selected by `pattern` (default: `planner`)
+    - invoke single production pipeline
     - capture stdout logs
   - Output:
-    - `{ query, pattern, plan, web_results, papers, context, answer, errors, observations, logs }`
-
-### Compare multiple patterns (NEW)
-
-- **POST** `/run_compare`
-  - Input:
-    - `{ "query": str, "patterns": ["react","planner","rewoo"], "session_id": "optional" }`
-  - Output:
-    - `{ "query": str, "results": { pattern: { answer, plan, errors, observations, logs } } }`
-  - Logs:
-    - `[Compare] Running pattern: ...`
-    - `[History] Saved`
-
-### Research DB cache (SQLite)
-
-- **POST** `/save_papers`
-  - Input: `{ "papers": [{ "title", "abstract", "source" }] }`
-  - Output: `{ "inserted": n, "ignored": m }`
-  - Logs: `[DB Save] ...`
-
-- **GET** `/query_papers?q=...`
-  - Output (top 3):
-    - `[{ "title": "...", "content": "..." }]`
-  - Logs: `[DB Query] ...`
-
-### History (SQLite)
-
-- **GET** `/history`
-  - Output:
-    - `[{ "query": "...", "pattern": "...", "answer": "...", "time": "..." }]` (last 20)
+    - `{ query, plan, web_results, papers, context, answer, errors, observations, logs }`
 
 ---
 
 ## 5) Luồng xử lý theo agent pattern
 
-### 5.1 Planner/ReWOO (full pipeline, adaptive)
+### 5.1 Production pipeline (single)
 
 ```mermaid
 flowchart LR
   start[Start_state:query] --> planner[planner_node]
   planner --> memLoad[load_memory_node]
-  memLoad --> memPlan[memory_planner_node]
-  memPlan --> router[route_node]
+  memLoad --> router[route_node]
   router -->|fast_path| fast[fast_path_node]
-  router -->|hybrid_path| hybrid[hybrid_path_node]
   router -->|research_path| research[research_node]
   fast --> rag[rag_node]
-  hybrid --> research
   research --> rag
   rag --> memRag[memory_rag_node]
   memRag --> synth[synth_node]
@@ -182,15 +147,11 @@ flowchart LR
 ```
 
 - `planner_node`: tạo `plan` và log `[Planner]`
-- `memory_planner_node`: memory-aware planning (dựa vào `memory_quality` + `memory_conflict` + `memory_sufficient`)
 - `route_node`: heuristic routing để giảm tool calls không cần thiết
 - `route_node` (uncertainty-aware):
-  - nếu `memory_conflict=True` → force `research_path`
   - nếu `memory_quality` cao + follow-up → `fast_path`
-  - nếu `memory_quality` vừa → `hybrid_path` (memory + selective search)
 - `fast_path_node`: skip web/paper live calls (giữ schema ổn định cho downstream)
-- `hybrid_path_node`: tạo `search_query` (query refinement) + `research_policy` (bounded/selective tools)
-- `research_node`: bounded ReAct + DB cache + ghi `errors/observations` (demo-safe)
+- `research_node`: gọi web search + paper search (1 lần), ghi `errors/observations` (demo-safe)
 - `rag_node`: lấy docs từ Chroma
 - `load_memory_node`: load history + memory_hits theo `session_id`
   - load short-term history: last 5 messages từ SQLite `chat_messages`
@@ -226,21 +187,6 @@ flowchart LR
   - usage tracking:
     - increment `usage_count` và update `last_used` cho memories đã được dùng trong run
 
-### 5.2 ReAct pattern (no planner node)
-
-```mermaid
-flowchart LR
-  start[Start_state:query] --> memLoad[load_memory_node]
-  memLoad --> research[research_node]
-  research --> rag[rag_node]
-  rag --> memRag[memory_rag_node]
-  memRag --> synth[synth_node]
-  synth --> memStore[store_memory_node]
-  memStore --> endNode[Answer]
-```
-
-Mục tiêu: rút gọn, nhanh, tập trung tool-use.
-
 ---
 
 ## 6) DB & persistence
@@ -262,11 +208,9 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
 - id, query, pattern, answer, created_at
 - Dùng để phân tích so sánh outputs theo pattern.
 
-#### tool_cache (NEW)
+#### tool_cache
 
-- tool, query, response_json, created_at
-- Unique index theo (tool, query)
-- TTL logic đơn giản (env: `TOOL_CACHE_TTL_SECONDS`)
+(Đã loại bỏ tool_cache SQLite. MCP chỉ giữ in-memory TTL cache.)
 
 #### chat_messages (NEW)
 
@@ -323,13 +267,13 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
   - host: `localhost:8501`
   - calls MCP bằng `MCP_URL=http://mcp:8000` (internal)
 - `app` (CLI runner, optional):
-  - runs `main.py` patterns (no server start)
+  - runs single production pipeline (no server start)
 
 ---
 
 ## 11) Demo checklist nhanh
 
-1. `docker-compose up --build`\n2. Mở UI: `http://localhost:8501`\n3. Chọn patterns (`react`, `planner`, `rewoo`) → Run\n4. Xem compare outputs + logs\n5. Xem History (last 20)\n6. Chạy lại cùng query → DB cache giúp reuse papers nhanh hơn
+1. `docker-compose up --build`\n2. Mở UI: `http://localhost:8501`\n3. Nhập query → Run\n4. Xem answer + logs
 
 ---
 

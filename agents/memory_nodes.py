@@ -20,18 +20,6 @@ def _truncate_messages(history: List[Dict[str, Any]], *, max_items: int = 5, max
     return out
 
 
-def _build_search_query(query: str, history: List[Dict[str, Any]]) -> str:
-    q = str(query or "").strip()
-    if not q:
-        return ""
-    last_user_messages = [
-        str(m.get("content") or "").strip() for m in (history or []) if str(m.get("role") or "").strip() == "user"
-    ]
-    last_user_messages = [m for m in last_user_messages if m][-3:]
-    suffix = " ".join(last_user_messages).strip()
-    return f"{q} {suffix}".strip()
-
-
 def _dedupe_hits(hits: List[Dict[str, Any]], *, limit: int = 5) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -283,8 +271,7 @@ def load_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
     try:
         now_s = float(time.time())
         tau_s = float(7 * 24 * 3600)
-        search_q = _build_search_query(query, history)
-        raw_hits = memory_store.search_memory(session_id=session_id, query=search_q, k=5)
+        raw_hits = memory_store.search_memory(session_id=session_id, query=query, k=5)
         hits0 = _dedupe_hits(raw_hits, limit=5)[:5]
 
         scored: List[Dict[str, Any]] = []
@@ -377,7 +364,7 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
     query = str(state.get("query") or "").strip()
     session_id = str(state.get("session_id") or "").strip()
     answer = str(state.get("answer") or "").strip()
-    pattern = str(state.get("pattern") or "").strip()
+    pattern = "production"
 
     errors_raw = list(state.get("errors") or [])
     errors: List[str] = [str(e) for e in errors_raw]
@@ -398,7 +385,7 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
         session_manager.save_message(session_id, "user", query)
         if answer:
             session_manager.save_message(session_id, "assistant", answer)
-        observations.append({"step": "memory_write_history", "ok": True, "note": f"pattern={pattern or 'n/a'}"})
+        observations.append({"step": "memory_write_history", "ok": True, "note": f"pattern={pattern}"})
     except Exception as e:
         errors.append(f"history_write_failed:{type(e).__name__}")
         observations.append({"step": "memory_write_history", "ok": False, "note": "failed"})
@@ -417,7 +404,7 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
             payload = f"{answer}\n\nSUMMARY: {summary}".strip()
             md = {
                 "summary": summary,
-                "pattern": pattern or "planner",
+                "pattern": pattern,
                 "importance": _importance(payload),
                 "usage_count": 0,
                 "created_at": now_i,
@@ -451,8 +438,7 @@ def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
         errors.append(f"vector_write_failed:{type(e).__name__}")
         observations.append({"step": "memory_write_vector", "ok": False, "note": "failed"})
 
-    # IMPORTANT: return `answer` so downstream/UI can always read it, even when
-    # `store_memory_node` is the final node in a graph variant (e.g., react).
+    # IMPORTANT: return `answer` so downstream/UI can always read it.
     return {
         "query": query,
         "answer": answer,

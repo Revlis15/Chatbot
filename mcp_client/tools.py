@@ -40,18 +40,3 @@ class ToolClient:
         except McpError as e:
             return ToolResult(ok=False, data={"query": q, "k": k, "docs": []}, error=str(e))
 
-    def query_papers(self, q: str) -> ToolResult:
-        try:
-            # endpoint returns list
-            res = call_mcp("/query_papers", q, timeout_s=10)
-            return ToolResult(ok=True, data=res)
-        except McpError as e:
-            return ToolResult(ok=False, data=[], error=str(e))
-
-    def save_papers(self, papers: List[Dict[str, Any]]) -> ToolResult:
-        try:
-            res = call_mcp_post("/save_papers", {"papers": papers}, timeout_s=15)
-            return ToolResult(ok=True, data=res)
-        except McpError as e:
-            return ToolResult(ok=False, data={"inserted": 0, "ignored": 0}, error=str(e))
-

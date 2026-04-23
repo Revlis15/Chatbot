@@ -4,9 +4,9 @@ This repository contains:
 
 - **`mcp`**: FastAPI MCP tool server (tool layer + orchestration endpoints)
 - **`app`**: LangGraph orchestrator + agents that call MCP (via a `ToolClient` abstraction)
-- **`ui`**: Streamlit demo UI (compare patterns + history)
+- **`ui`**: Streamlit demo UI (single pipeline execution)
 - **Chroma** persistence via a Docker named volume
-- **SQLite** persistence via a Docker named volume (`papers`, `history`, `tool_cache`, `chat_messages`)
+- **SQLite** persistence via a Docker named volume (`chat_messages`)
 
 ## What’s included (demo-safe stack)
 
@@ -18,14 +18,14 @@ This repository contains:
   - cached under **`/app/cache`** in Docker
 - **LLM**: OpenRouter (if configured) with a guaranteed fallback response
 - **Adaptive graph**:
-  - heuristic **router** (`fast_path` / `hybrid_path` / `research_path`) to reduce unnecessary tool calls
+  - heuristic **router** (`fast_path` / `research_path`) to reduce unnecessary tool calls
   - linear pipeline after routing: RAG → synthesis → memory store (no validation retry loop)
 - **Observability**:
   - structured `errors` + `observations` attached to runs (available in API responses)
 - **Session memory (NEW)**:
   - short-term memory: SQLite chat history (`chat_messages`)
   - long-term memory: Chroma collection `research_assistant_memory`
-  - optional `session_id` can be passed to `/run` and `/run_compare` (backward compatible)
+  - optional `session_id` can be passed to `/run`
   - memory retrieval query: `query + last user messages` (from last 5 turns)
   - memory ranking (importance + usage aware):
     - per-memory `final_score = 0.4*similarity + 0.2*recency + 0.3*importance + 0.1*log(1+usage_count)`
@@ -188,13 +188,5 @@ The UI supports `session_id` (optional). You can also call the API directly:
 ```bash
 curl -X POST http://localhost:8001/run ^
   -H "Content-Type: application/json" ^
-  -d "{\"q\":\"What did we decide last time?\",\"session_id\":\"demo-session-1\",\"pattern\":\"planner\"}"
-```
-
-For compare:
-
-```bash
-curl -X POST http://localhost:8001/run_compare ^
-  -H "Content-Type: application/json" ^
-  -d "{\"query\":\"Continue based on our last answer\",\"patterns\":[\"planner\",\"react\"],\"session_id\":\"demo-session-1\"}"
+  -d "{\"q\":\"What did we decide last time?\",\"session_id\":\"demo-session-1\"}"
 ```

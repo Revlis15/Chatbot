@@ -48,7 +48,6 @@ app = FastAPI(title="MCP Tool Server (Research Assistant)", version="0.1.0")
 _cache = TTLCache(ttl_seconds=int(os.getenv("MCP_CACHE_TTL_SECONDS", "300")))
 _vector_store = ChromaVectorStore()
 _graph = None
-_db_inited = False
 _graphs: Dict[str, Any] = {}
 
 
@@ -123,271 +122,13 @@ def health() -> Dict[str, str]:
     return {"status": "ok"}
 
 
-def _db_path() -> str:
-    path = os.getenv("RESEARCH_DB_PATH", "/app/data/research.db")
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    return path
+def _get_pipeline():
+    if "production_pipeline" in _graphs:
+        return _graphs["production_pipeline"]
+    from graph.build_graph import build_production_pipeline
 
-
-def _init_db_if_needed() -> None:
-    global _db_inited
-    if _db_inited:
-        return
-    try:
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS papers (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  title TEXT,
-                  abstract TEXT,
-                  source TEXT,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_papers_title ON papers(title);")
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS history (
-                  id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  query TEXT,
-                  pattern TEXT,
-                  answer TEXT,
-                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                );
-                """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS tool_cache (
-                  tool TEXT,
-                  query TEXT,
-                  response_json TEXT,
-                  created_at INTEGER
-                );
-                """
-            )
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tool_cache_tool_query ON tool_cache(tool, query);")
-            conn.commit()
-            _db_inited = True
-        finally:
-            conn.close()
-    except Exception:
-        # Demo-safe: never crash on DB init failure.
-        _db_inited = False
-
-
-def _db_query_papers(q: str, limit: int = 3) -> List[Dict[str, str]]:
-    try:
-        _init_db_if_needed()
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            like = f"%{q}%"
-            rows = conn.execute(
-                """
-                SELECT title, abstract
-                FROM papers
-                WHERE title LIKE ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (like, limit),
-            ).fetchall()
-            out: List[Dict[str, str]] = []
-            for title, abstract in rows:
-                out.append({"title": str(title or ""), "content": str(abstract or "")})
-            return out[:limit]
-        finally:
-            conn.close()
-    except Exception:
-        return []
-
-
-def _db_save_papers(papers: List[Dict[str, Any]]) -> Dict[str, int]:
-    inserted = 0
-    ignored = 0
-    try:
-        _init_db_if_needed()
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            for p in papers[:50]:
-                title = str(p.get("title") or "").strip()
-                abstract = str(p.get("abstract") or "").strip()
-                source = str(p.get("source") or "").strip()
-                if not title:
-                    continue
-                cur = conn.execute(
-                    "INSERT OR IGNORE INTO papers(title, abstract, source) VALUES(?, ?, ?)",
-                    (title, abstract, source),
-                )
-                if cur.rowcount == 1:
-                    inserted += 1
-                else:
-                    ignored += 1
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        return {"inserted": 0, "ignored": 0}
-    return {"inserted": inserted, "ignored": ignored}
-
-
-def _db_save_history(query: str, pattern: str, answer: str) -> None:
-    try:
-        _init_db_if_needed()
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            conn.execute(
-                "INSERT INTO history(query, pattern, answer) VALUES(?, ?, ?)",
-                (query, pattern, answer),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        # Demo-safe: ignore history failures.
-        return
-
-
-def _db_get_history(limit: int = 20) -> List[Dict[str, str]]:
-    try:
-        _init_db_if_needed()
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            rows = conn.execute(
-                """
-                SELECT query, pattern, answer, created_at
-                FROM history
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
-            out: List[Dict[str, str]] = []
-            for q, pattern, answer, created_at in rows:
-                out.append(
-                    {
-                        "query": str(q or ""),
-                        "pattern": str(pattern or ""),
-                        "answer": str(answer or ""),
-                        "time": str(created_at or ""),
-                    }
-                )
-            return out
-        finally:
-            conn.close()
-    except Exception:
-        return []
-
-
-def _tool_cache_ttl_seconds() -> int:
-    # default: 10 minutes
-    return int(os.getenv("TOOL_CACHE_TTL_SECONDS", "600"))
-
-
-def _tool_cache_get(tool: str, q: str) -> Optional[Dict[str, Any]]:
-    try:
-        _init_db_if_needed()
-        if not _db_inited:
-            return None
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            row = conn.execute(
-                "SELECT response_json, created_at FROM tool_cache WHERE tool = ? AND query = ?",
-                (tool, q),
-            ).fetchone()
-            if not row:
-                return None
-            payload, created_at = row
-            if not payload:
-                return None
-            age = int(time.time()) - int(created_at or 0)
-            if age > _tool_cache_ttl_seconds():
-                return None
-            import json
-
-            return json.loads(payload)
-        finally:
-            conn.close()
-    except Exception:
-        return None
-
-
-def _tool_cache_set(tool: str, q: str, response: Dict[str, Any]) -> None:
-    try:
-        _init_db_if_needed()
-        if not _db_inited:
-            return
-        import json
-
-        payload = json.dumps(response, ensure_ascii=False)
-        conn = sqlite3.connect(_db_path(), timeout=5)
-        try:
-            conn.execute(
-                "INSERT OR REPLACE INTO tool_cache(tool, query, response_json, created_at) VALUES(?, ?, ?, ?)",
-                (tool, q, payload, int(time.time())),
-            )
-            conn.commit()
-        finally:
-            conn.close()
-    except Exception:
-        return
-
-
-def _build_react_graph():
-    from langgraph.graph import END, StateGraph
-
-    from agents.memory_nodes import load_memory_node, memory_rag_node, store_memory_node
-    from agents.rag_agent import rag_node
-    from agents.research_agent import research_node
-    from agents.synth_agent import synth_node
-
-    # Minimal react-style graph (still bounded & demo-safe):
-    # load_memory -> research -> rag -> memory_rag -> synth -> store_memory
-    g = StateGraph(dict)
-    g.add_node("load_memory", load_memory_node)
-    g.add_node("research_agent", research_node)
-    g.add_node("rag_agent", rag_node)
-    g.add_node("memory_rag", memory_rag_node)
-    g.add_node("synth_agent", synth_node)
-    g.add_node("store_memory", store_memory_node)
-    g.set_entry_point("load_memory")
-    g.add_edge("load_memory", "research_agent")
-    g.add_edge("research_agent", "rag_agent")
-    g.add_edge("rag_agent", "memory_rag")
-    g.add_edge("memory_rag", "synth_agent")
-    g.add_edge("synth_agent", "store_memory")
-    g.add_edge("store_memory", END)
-    return g.compile()
-
-
-def _get_graph(pattern: str = "planner"):
-    """
-    Return a compiled graph per pattern.
-    - planner/rewoo: full pipeline graph
-    - react: graph without planner node
-    """
-    p = (pattern or "planner").strip().lower()
-    if p in _graphs:
-        return _graphs[p]
-
-    if p in ("planner", "rewoo"):
-        from graph.build_graph import build_research_graph
-
-        _graphs[p] = build_research_graph()
-        return _graphs[p]
-
-    if p == "react":
-        _graphs[p] = _build_react_graph()
-        return _graphs[p]
-
-    # Fallback to planner for unknown patterns.
-    from graph.build_graph import build_research_graph
-
-    _graphs[p] = build_research_graph()
-    return _graphs[p]
+    _graphs["production_pipeline"] = build_production_pipeline()
+    return _graphs["production_pipeline"]
 
 
 @app.post("/run")
@@ -399,15 +140,9 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     """
     q = str((payload or {}).get("q") or "").strip()
     session_id = str((payload or {}).get("session_id") or "").strip()
-    pattern_raw = str((payload or {}).get("pattern") or "").strip().lower()
-    # If caller doesn't choose a pattern (missing/blank), default to planner.
-    # If caller sends an unknown pattern, also default to planner for safety.
-    allowed = {"planner", "rewoo", "react"}
-    pattern = pattern_raw if pattern_raw in allowed else "planner"
     if not q:
         return {
             "query": q,
-            "pattern": pattern,
             "plan": [],
             "web_results": [],
             "papers": [],
@@ -419,12 +154,12 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
-            graph = _get_graph(pattern)
+            graph = _get_pipeline()
             state = graph.invoke(
-                {"query": q, "session_id": session_id, "pattern": pattern},
+                {"query": q, "session_id": session_id},
                 config={
-                    "tags": ["demo", "ui", "langgraph", "research-assistant", pattern],
-                    "metadata": {"step_type": "full_run", "pattern": pattern, "session_id": session_id},
+                    "tags": ["demo", "ui", "langgraph", "research-assistant", "production_pipeline"],
+                    "metadata": {"step_type": "full_run", "pipeline": "production_pipeline", "session_id": session_id},
                 },
             )
 
@@ -433,7 +168,6 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
         return {
             "query": q,
-            "pattern": pattern,
             "plan": state.get("plan") or [],
             "web_results": state.get("web_results") or [],
             "papers": state.get("papers") or [],
@@ -460,81 +194,6 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
         }
 
 
-@app.post("/save_papers")
-def save_papers(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    papers = (payload or {}).get("papers") or []
-    if not isinstance(papers, list):
-        papers = []
-    counts = _db_save_papers(papers)
-    print("[DB Save]", f"inserted={counts.get('inserted', 0)}", f"ignored={counts.get('ignored', 0)}")
-    return counts
-
-
-@app.get("/query_papers")
-def query_papers(q: str = Query(..., min_length=1)) -> List[Dict[str, str]]:
-    results = _db_query_papers(q, limit=3)
-    print("[DB Query]", f"q={q}", f"results={len(results)}")
-    return results
-
-
-@app.post("/run_compare")
-def run_compare(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
-    query = str((payload or {}).get("query") or "").strip()
-    session_id = str((payload or {}).get("session_id") or "").strip()
-    patterns = (payload or {}).get("patterns") or []
-    if not isinstance(patterns, list):
-        patterns = []
-    patterns = [str(p).strip().lower() for p in patterns if str(p).strip()]
-    if not patterns:
-        patterns = ["planner"]
-
-    results: Dict[str, Any] = {}
-    for pattern in patterns:
-        buf = io.StringIO()
-        print("[Compare] Running pattern:", pattern)
-        try:
-            with contextlib.redirect_stdout(buf):
-                graph = _get_graph(pattern)
-                # For patterns that don't include planner node, we still attach a plan for UI consistency.
-                plan = []
-                try:
-                    from agents.planner import build_plan
-
-                    plan = build_plan(query)
-                except Exception:
-                    plan = []
-
-                state = graph.invoke(
-                    {"query": query, "plan": plan, "session_id": session_id, "pattern": pattern},
-                    config={
-                        "tags": ["demo", "compare", "langgraph", "research-assistant", pattern],
-                        "metadata": {"pattern": pattern, "session_id": session_id},
-                    },
-                )
-            answer = str(state.get("answer") or "")
-            results[pattern] = {
-                "answer": answer,
-                "plan": state.get("plan") or plan,
-                "errors": state.get("errors") or [],
-                "observations": state.get("observations") or [],
-                "logs": buf.getvalue(),
-            }
-            _db_save_history(query=query, pattern=pattern, answer=answer)
-        except Exception as e:
-            logs = buf.getvalue()
-            logs += f"\n[Compare] ERROR: {type(e).__name__}: {e}\n"
-            results[pattern] = {"answer": "", "plan": [], "errors": [], "observations": [], "logs": logs}
-            _db_save_history(query=query, pattern=pattern, answer="")
-
-    print("[History] Saved")
-    return {"query": query, "results": results}
-
-
-@app.get("/history")
-def history() -> List[Dict[str, str]]:
-    return _db_get_history(limit=20)
-
-
 @app.get("/search_web")
 def search_web(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
     key = _cache_key("/search_web", q)
@@ -542,19 +201,12 @@ def search_web(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
     if cached is not None:
         return {"query": q, "results": cached, "cached": True}
 
-    db_cached = _tool_cache_get("search_web", q)
-    if isinstance(db_cached, dict) and "results" in db_cached:
-        results = db_cached.get("results") or []
-        _cache.set(key, results)
-        return {"query": q, "results": results, "cached": True, "cached_via": "sqlite"}
-
     # Hybrid search: try Tavily first, then DuckDuckGo fallback.
     results = _search_web_tavily(q)
     if not results:
         results = _search_web_ddg(q)
 
     _cache.set(key, results)
-    _tool_cache_set("search_web", q, {"results": results})
     return {"query": q, "results": results, "cached": False}
 
 
@@ -564,12 +216,6 @@ def search_paper(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
     cached = _cache.get(key)
     if cached is not None:
         return {"query": q, "results": cached, "cached": True}
-
-    db_cached = _tool_cache_get("search_paper", q)
-    if isinstance(db_cached, dict) and "results" in db_cached:
-        results = db_cached.get("results") or []
-        _cache.set(key, results)
-        return {"query": q, "results": results, "cached": True, "cached_via": "sqlite"}
 
     url = "https://api.semanticscholar.org/graph/v1/paper/search"
     print("[Paper Search]")
@@ -592,7 +238,6 @@ def search_paper(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
         print("[Paper Search]", "failed:", type(e).__name__)
         results: List[Dict[str, str]] = []
         _cache.set(key, results)
-        _tool_cache_set("search_paper", q, {"results": results})
         return {"query": q, "results": results, "cached": False}
 
     items = (data.get("data") or [])[:3]
@@ -606,7 +251,6 @@ def search_paper(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
         )
 
     _cache.set(key, results)
-    _tool_cache_set("search_paper", q, {"results": results})
     return {"query": q, "results": results, "cached": False}
 
 
