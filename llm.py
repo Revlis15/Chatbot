@@ -5,7 +5,7 @@ from typing import Optional
 
 import requests
 
-
+@traceable(run_type="llm", name="OpenRouter_Call")
 def call_openrouter(prompt: str) -> Optional[str]:
     """
     OpenRouter chat completion.
@@ -31,7 +31,7 @@ def call_openrouter(prompt: str) -> Optional[str]:
             json={
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "You are a professional AI Research Assistant. Answer in Vietnamese. Be technical, precise, and structured."},
+                    {"role": "system", "content": "You are a professional AI Research Assistant. Be technical, precise, and structured."},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.2,

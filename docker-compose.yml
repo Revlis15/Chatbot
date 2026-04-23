@@ -13,7 +13,12 @@ services:
       - chroma_data:/app/chroma_db
       - research_db_data:/app/data
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()\""]
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request;
+            urllib.request.urlopen('http://127.0.0.1:8000/health').read()\"",
+        ]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -22,7 +27,7 @@ services:
     build:
       context: .
       dockerfile: app/Dockerfile
-    profiles: ["manual"]
+    profiles: [ "manual" ]
     depends_on:
       mcp:
         condition: service_healthy
@@ -31,7 +36,7 @@ services:
     environment:
       - MCP_URL=http://mcp:8000
       - START_MCP_SERVER=0
-    command: ["python", "main.py", "--mode", "planner", "--start-server", "0"]
+    command: [ "python", "main.py", "--mode", "production", "--start-server", "0" ]
 
   ui:
     build:
@@ -44,7 +49,16 @@ services:
       - .env
     environment:
       - MCP_URL=http://mcp:8000
-    command: ["streamlit", "run", "ui.py", "--server.port", "8501", "--server.address", "0.0.0.0"]
+    command:
+      [
+        "streamlit",
+        "run",
+        "ui.py",
+        "--server.port",
+        "8501",
+        "--server.address",
+        "0.0.0.0",
+      ]
     ports:
       - "8501:8501"
 

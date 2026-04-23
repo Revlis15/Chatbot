@@ -352,7 +352,7 @@ def memory_rag_node(state: Dict[str, Any]) -> Dict[str, Any]:
     context = format_memory_context(history=history, memory_hits=memory_hits[:5], docs=docs)
     print("[Memory] Used in context:", bool(history or memory_hits))
     observations.append({"step": "memory_rag", "ok": True, "note": f"ctx_chars={len(context)}"})
-    return {"query": query, "context": context, "errors": errors, "observations": observations}
+    return {"query": query, "memory_context": context, "errors": errors, "observations": observations}
 
 
 def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:

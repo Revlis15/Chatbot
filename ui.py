@@ -13,7 +13,7 @@ def _mcp_url() -> str:
 
 def _post_run(query: str) -> Dict[str, Any]:
     url = f"{_mcp_url()}/run"
-    resp = requests.post(url, json={"q": query}, timeout=180)
+    resp = requests.post(url, json={"q": query}, timeout=)
     resp.raise_for_status()
     return resp.json()
 

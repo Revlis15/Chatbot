@@ -11,4 +11,4 @@ RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/wh
 
 COPY . /app
 
-CMD ["python", "main.py", "--mode", "planner", "--start-server", "0"]
+CMD ["python", "main.py", "--mode", "production", "--start-server", "0"]

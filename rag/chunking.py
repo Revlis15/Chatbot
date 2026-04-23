@@ -25,11 +25,3 @@ def chunk_text(text: str, *, max_chars: int = 320, overlap_chars: int = 40) -> L
             chunks.append(chunk)
         i += step
     return chunks
-
-
-def chunk_many(texts: Iterable[str], *, max_chars: int = 320, overlap_chars: int = 40) -> List[str]:
-    out: List[str] = []
-    for t in texts:
-        out.extend(chunk_text(str(t), max_chars=max_chars, overlap_chars=overlap_chars))
-    return out
-

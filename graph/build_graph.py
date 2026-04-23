@@ -15,31 +15,27 @@ from graph.state import GraphState
 def build_production_pipeline():
     g = StateGraph(GraphState)
 
-    # Định nghĩa các Node
     g.add_node("planner", planner_node)
     g.add_node("load_memory", load_memory_node)
     g.add_node("research", research_node)
     g.add_node("rag_agent", rag_node)
-    g.add_node("replanner", replanner_node) 
+    g.add_node("replanner", replanner_node)
     g.add_node("synth_agent", synth_node)
     g.add_node("store_memory", store_memory_node)
 
-    # Thiết lập luồng chạy với Vòng lặp
-    g.set_entry_point("planner")
-    g.add_edge("planner", "load_memory")
-    g.add_edge("load_memory", "research")
-    g.add_edge("research", "rag_agent")
+    g.set_entry_point("load_memory")
     
-    # Sau khi chạy RAG, chúng ta đi đến bộ phận Re-plan
+    g.add_edge("load_memory", "planner")
+    g.add_edge("planner", "research")
+    g.add_edge("research", "rag_agent")
     g.add_edge("rag_agent", "replanner")
 
-    # Cạnh điều kiện: Re-planner quyết định đi đâu tiếp
     g.add_conditional_edges(
         "replanner",
-        lambda s: s.get("route"), # Dựa trên kết quả của replanner_node
+        lambda s: s.get("replan_status"),
         {
-            "research": "research",      # LẶP LẠI: Quay lại nghiên cứu nếu thiếu thông tin
-            "synth_agent": "synth_agent" # KẾT THÚC: Đi đến tổng hợp kết quả
+            "continue": "research",
+            "done": "synth_agent"
         }
     )
 
