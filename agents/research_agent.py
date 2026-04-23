@@ -1,77 +1,64 @@
 from __future__ import annotations
-
 from typing import Any, Dict, List
 from mcp_client.tools import ToolClient
 
-
 def research_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    query = str(state.get("query") or "").strip()
-    if not query:
-        return {
-            "query": query,
-            "web_results": [],
-            "papers": [],
-            "errors": [],
-            "observations": [],
-        }
+    """Thực thi tìm kiếm tuần tự cho từng sub-query được Planner đề xuất."""
+    plan = state.get("plan") or []
+    if "research" not in plan:
+        return {}
 
+    # Nếu Planner không tạo sub_queries, dùng query gốc làm fallback
+    sub_queries = state.get("sub_queries") or [state.get("query")]
     tc = ToolClient()
-    policy = state.get("tool_policy") or {}
+    
+    all_web_results = []
+    all_papers = []
+    observations = []
 
-    errors: List[Dict[str, Any]] = []
-    observations: List[Dict[str, Any]] = []
+    print(f"[Research] Processing {len(sub_queries)} sub-queries...")
 
-    web_results: List[Dict[str, Any]] = []
-    papers: List[Dict[str, Any]] = []
+    for i, sq in enumerate(sub_queries, start=1):
+        print(f" -> Execution {i}/{len(sub_queries)}: {sq}")
+        
+        # 1. Tìm kiếm Web (cho tin tức, GitHub, blog kỹ thuật)
+        try:
+            web_tr = tc.search_web(sq)
+            if web_tr.ok:
+                results = (web_tr.data.get("results") or [])[:2] # Lấy top 2 mỗi query
+                all_web_results.extend(results)
+        except Exception as e:
+            print(f" [!] Web search failed for '{sq}': {e}")
 
-    print(f"[Research] policy={policy}")
+        # 2. Tìm kiếm Paper (ArXiv/Scholar cho các dự án Computer Vision)
+        # Chỉ chạy nếu Planner yêu cầu nghiên cứu sâu
+        if "search_paper" in plan or i == 1: # Luôn ưu tiên paper cho query đầu tiên
+            try:
+                paper_tr = tc.search_paper(sq)
+                if paper_tr.ok:
+                    papers = (paper_tr.data.get("results") or [])[:2]
+                    all_papers.extend(papers)
+            except Exception as e:
+                print(f" [!] Paper search failed for '{sq}': {e}")
 
-    # =========================
-    # TOOL EXECUTION (WEB)
-    # =========================
-    if policy.get("use_web", False):
-        tr = tc.search_web(query)
-        data = tr.data or {}
+    # Loại bỏ trùng lặp nếu cần (Deduplication đơn giản qua URL/Title)
+    seen_urls = set()
+    unique_web = []
+    for r in all_web_results:
+        url = r.get("url")
+        if url not in seen_urls:
+            unique_web.append(r)
+            seen_urls.add(url)
 
-        web_results = (data.get("results") or [])[:3]
-
-        observations.append({
-            "tool": "search_web",
-            "output_size": len(web_results),
-            "ok": bool(tr.ok),
-        })
-
-        if not tr.ok:
-            errors.append({
-                "tool": "search_web",
-                "error": tr.error,
-            })
-
-    # =========================
-    # TOOL EXECUTION (PAPER)
-    # =========================
-    if policy.get("use_paper", False):
-        tr = tc.search_paper(query)
-        data = tr.data or {}
-
-        papers = (data.get("results") or [])[:3]
-
-        observations.append({
-            "tool": "search_paper",
-            "output_size": len(papers),
-            "ok": bool(tr.ok),
-        })
-
-        if not tr.ok:
-            errors.append({
-                "tool": "search_paper",
-                "error": tr.error,
-            })
+    observations.append({
+        "step": "multi_query_research",
+        "queries_count": len(sub_queries),
+        "total_web": len(unique_web),
+        "total_papers": len(all_papers)
+    })
 
     return {
-        "query": query,
-        "web_results": web_results,
-        "papers": papers,
-        "errors": errors,
-        "observations": observations,
+        "web_results": unique_web[:5], # Giới hạn tổng số kết quả để tránh tràn context
+        "papers": all_papers[:5],
+        "observations": observations
     }

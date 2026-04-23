@@ -6,6 +6,7 @@ import operator
 
 class GraphState(TypedDict, total=False):
     query: str
+    plan: list[str]
     session_id: str | None
 
     # memory inputs
