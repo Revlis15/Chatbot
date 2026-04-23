@@ -78,7 +78,7 @@ flowchart LR
 ├── session_manager.py       # SQLite session history (chat_messages)
 ├── memory_store.py          # Chroma-based long-term memory store (scoped by session_id)
 ├── ui.py                    # Streamlit demo UI (compare + history)
-├── ui_graph.py              # Streamlit graph viewer (agraph + live/replay execution)
+├── ui_graph.py              # (removed; previously Streamlit graph viewer)
 ├── main.py                  # CLI runner (planner/react/rewoo), optional LangSmith
 ├── docker-compose.yml       # services: mcp, app, ui + volumes
 ├── requirements.txt
@@ -121,12 +121,12 @@ flowchart LR
 
 - **POST** `/run`
   - Input:
-    - `{ "q": "...", "session_id": "optional" }`
+    - `{ "q": "...", "session_id": "optional", "pattern": "optional (planner|rewoo|react)" }`
   - Behavior:
-    - invoke full LangGraph pipeline (planner flow)
+    - invoke LangGraph pipeline selected by `pattern` (default: `planner`)
     - capture stdout logs
   - Output:
-    - `{ query, plan, web_results, papers, context, answer, errors, observations, logs }`
+    - `{ query, pattern, plan, web_results, papers, context, answer, errors, observations, logs }`
 
 ### Compare multiple patterns (NEW)
 
@@ -333,21 +333,6 @@ Mục tiêu: rút gọn, nhanh, tập trung tool-use.
 
 ---
 
-## 12) Graph Viewer (Streamlit execution visualization)
+## 12) Graph Viewer
 
-UI có thêm tab **Graph Viewer**:
-
-- **Graph visualization**: dùng `streamlit-agraph` để render nodes + edges theo LangGraph pipeline.
-- **Node highlighting**:
-  - active node: đỏ
-  - completed nodes: xanh
-  - pending nodes: xám
-- **Live mode**:
-  - chạy local LangGraph `app.stream(inputs)` bên trong Streamlit
-  - update graph + logs theo từng event `{node, status=start|end, data}`
-- **Replay mode**:
-  - chạy từ `trace` (mock/saved) và simulate delay để demo
-- **Panels**:
-  - Left: graph
-  - Right-top: execution logs (scrollable)
-  - Right-bottom: decision panel (`memory_quality`, `memory_conflict`, `route`)
+Đã loại bỏ phần trực hoá graph trong UI (tab Graph Viewer / `streamlit-agraph`).

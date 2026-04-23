@@ -6,8 +6,6 @@ from typing import Any, Dict, List
 import requests
 import streamlit as st
 
-import ui_graph
-
 
 def _mcp_url() -> str:
     return os.getenv("MCP_URL", "http://localhost:8001").rstrip("/")
@@ -75,9 +73,7 @@ def _truncate(text: str, n: int = 300) -> str:
 st.set_page_config(page_title="AI Research Assistant", layout="wide")
 st.title("AI Research Assistant")
 
-tab_compare, tab_graph = st.tabs(["Compare", "Graph Viewer"])
-
-with tab_compare:
+with st.container():
     query = st.text_input("Query", value="So sánh YOLOv8 và Faster R-CNN mới nhất")
     session_id = st.text_input("session_id (optional)", value="demo-session-1")
     patterns = st.multiselect(
@@ -156,27 +152,3 @@ with tab_compare:
                     st.info("No history yet.")
             except Exception as e:
                 st.error(f"Failed to load history: {type(e).__name__}: {e}")
-
-with tab_graph:
-    st.subheader("Graph visualization + execution viewer")
-    mode = st.radio("Mode", ["Live", "Replay"], horizontal=True)
-    q = st.text_input("Execution query", value="Continue based on our last answer", key="gv_query")
-    session_id = st.text_input("session_id (optional)", value="demo-session-1", key="gv_sid")
-
-    app = None
-    if mode == "Live":
-        with st.expander("Live mode notes", expanded=False):
-            st.write("- Live mode runs a local LangGraph `app.stream()` inside Streamlit.")
-            st.write("- It does not call MCP `/run` endpoints.")
-        try:
-            from graph.build_graph import build_research_graph
-
-            app = build_research_graph()
-        except Exception as e:
-            st.error(f"Failed to build local graph app: {type(e).__name__}: {e}")
-            app = None
-
-    inputs: Dict[str, Any] = {"query": q, "session_id": session_id.strip() or None}
-    trace = ui_graph.mock_trace_example()
-    ui_graph.render_execution_viewer(app=app, inputs=inputs, mode=mode, replay_trace=trace)
-

@@ -102,4 +102,3 @@ def synth_node(state: Dict[str, Any]) -> Dict[str, Any]:
     # Demo-safe fallback (required), plus a failure flag for observability.
     answer = _fallback_answer()
     return {"answer": answer, "synth_failed": True}
-

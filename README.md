@@ -1,6 +1,7 @@
 # AI Research Assistant (LangGraph + MCP + RAG + SQLite + Streamlit) — Dockerized
 
 This repository contains:
+
 - **`mcp`**: FastAPI MCP tool server (tool layer + orchestration endpoints)
 - **`app`**: LangGraph orchestrator + agents that call MCP (via a `ToolClient` abstraction)
 - **`ui`**: Streamlit demo UI (compare patterns + history)
@@ -38,13 +39,7 @@ This repository contains:
     - stored memory includes full answer + `summary` (first 2 sentences)
     - stored metadata includes: `importance`, `usage_count`, `created_at`, `last_used`, `type`
 - **Graph viewer (NEW)**:
-  - Streamlit execution viewer with graph visualization (nodes/edges + active/completed/pending highlight)
-  - Live mode: runs local LangGraph `app.stream()` to show step-by-step execution
-  - Replay mode: simulates execution from a saved/mock trace
-  - Panels:
-    - Graph (left)
-    - Execution logs (right-top)
-    - Decision panel (right-bottom): `memory_quality`, `memory_conflict`, `route`
+  - (removed) previously included a Streamlit graph-visualization tab
 
 ## Project layout
 
@@ -62,7 +57,6 @@ This repository contains:
 ├── main.py
 ├── session_manager.py
 ├── memory_store.py
-├── ui_graph.py
 ├── requirements.txt
 └── .env.example
 ```
@@ -76,6 +70,7 @@ copy .env.example .env
 ```
 
 Supported variables:
+
 - **`TAVILY_API_KEY`**: optional; enables Tavily as primary web search
 - **`OPENROUTER_API_KEY`**: optional; enables OpenRouter for synthesis
 - **`OPENROUTER_MODEL`**: optional; defaults to `meta-llama/llama-3-8b-instruct`
@@ -87,9 +82,8 @@ Supported variables:
 - **`MCP_CACHE_TTL_SECONDS`**: optional; in-memory TTL cache in MCP (default `300`)
 - **`CHROMA_PERSIST_DIR`**: optional; defaults to `/app/chroma_db`
 - **`RAG_CHUNK_MAX_CHARS`**: optional; chunk size for seed docs (default `360`)
- 
-UI dependency:
-- **`streamlit-agraph`**: graph visualization in `ui_graph.py`
+
+UI dependency: Streamlit only.
 
 ## Run with Docker Compose
 
@@ -105,9 +99,11 @@ docker-compose up --build
 ### Ports / URLs
 
 Inside Docker networking:
+
 - **App calls MCP at** `http://mcp:8000`
 
 On your host machine:
+
 - MCP is published as **`http://localhost:8001`** (container port 8000 → host port 8001)
   - Health check: `http://localhost:8001/health`
 - Streamlit UI is published as **`http://localhost:8501`**
@@ -118,12 +114,14 @@ On your host machine:
 ### Chroma persistence
 
 Chroma persists to:
+
 - container path: **`/app/chroma_db`**
 - Docker volume: **`chroma_data`**
 
 ### Embedding/model cache (Docker)
 
 HuggingFace/SentenceTransformers caches model files under:
+
 - **`/app/cache`**
 
 To remove persisted data:
@@ -177,6 +175,7 @@ If `LANGCHAIN_API_KEY` is not set, the system runs normally with no tracing.
 ## 🤗 HuggingFace Token (Optional)
 
 You can provide a HuggingFace token to improve model download reliability/speed and avoid rate limits:
+
 - Set `HF_TOKEN` (optional)
 - Recommended: set `HF_HUB_DISABLE_TELEMETRY=1`
 
@@ -184,12 +183,12 @@ If `HF_TOKEN` is not set, the system uses public access and still works normally
 
 ## Session-aware usage (optional)
 
-The UI does not send `session_id` yet (by design). For session memory, call the API directly:
+The UI supports `session_id` (optional). You can also call the API directly:
 
 ```bash
 curl -X POST http://localhost:8001/run ^
   -H "Content-Type: application/json" ^
-  -d "{\"q\":\"What did we decide last time?\",\"session_id\":\"demo-session-1\"}"
+  -d "{\"q\":\"What did we decide last time?\",\"session_id\":\"demo-session-1\",\"pattern\":\"planner\"}"
 ```
 
 For compare:
@@ -199,4 +198,3 @@ curl -X POST http://localhost:8001/run_compare ^
   -H "Content-Type: application/json" ^
   -d "{\"query\":\"Continue based on our last answer\",\"patterns\":[\"planner\",\"react\"],\"session_id\":\"demo-session-1\"}"
 ```
-
