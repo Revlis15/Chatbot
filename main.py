@@ -31,7 +31,7 @@ def _langgraph_config(mode: str) -> Dict[str, Any]:
         "tags": ["demo", "langgraph", "research-assistant"],
         "metadata": {
             "mode": mode,
-            "agents": ["planner", "research_agent", "rag_agent", "synth_agent"],
+            "agents": ["router", "research_agent", "rag_agent", "synth_agent"],
         },
     }
 
@@ -92,9 +92,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        default=os.getenv("MODE", "planner"),
+        default="production",
         choices=["production"],
-        help="production=single pipeline",
+        help="production pipeline execution",
     )
     parser.add_argument(
         "--query",

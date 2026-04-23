@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Annotated, TypedDict
+import operator
 
 
 class GraphState(TypedDict, total=False):
@@ -21,8 +22,8 @@ class GraphState(TypedDict, total=False):
     # planning
     plan: list[str]
 
-    # routing / execution
-    route: str
+    # tool policy
+    tool_policy: dict
 
     # tool outputs
     web_results: list[dict]
@@ -36,6 +37,5 @@ class GraphState(TypedDict, total=False):
     synth_failed: bool
 
     # observability
-    errors: list[dict]
-    observations: list[dict]
-
+    observations: Annotated[list[dict], operator.add] # Tự động cộng dồn thay vì ghi đè
+    errors: Annotated[list[dict], operator.add]

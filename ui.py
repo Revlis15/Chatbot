@@ -32,7 +32,7 @@ st.set_page_config(page_title="AI Research Assistant", layout="wide")
 st.title("AI Research Assistant")
 
 with st.container():
-    query = st.text_input("Query", value="So sánh YOLOv8 và Faster R-CNN mới nhất")
+    query = st.text_input("Query", placeholder="Câu hỏi nghiên cứu của bạn là gì?")
     session_id = st.text_input("session_id (optional)", value="demo-session-1")
     run = st.button("Run", type="primary")
 

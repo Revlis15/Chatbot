@@ -31,7 +31,7 @@ def call_openrouter(prompt: str) -> Optional[str]:
             json={
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "You are a helpful research assistant. Be concise and demo-safe."},
+                    {"role": "system", "content": "You are a professional AI Research Assistant. Answer in Vietnamese. Be technical, precise, and structured."},
                     {"role": "user", "content": prompt},
                 ],
                 "temperature": 0.2,
