@@ -8,11 +8,22 @@ from llm import call_openrouter
 from graph.state import GraphState
 
 ALLOWED_STEPS = [
-    "load_memory",
-    "research",
-    "rag_agent",
-    "synth_agent"
+    "search_web",    
+    "search_paper",  
+    "summarize",     
+    "rag_agent",     
+    "synth_agent"    
 ]
+
+STEP_DESCRIPTIONS = {
+    "search_web": "Use for latest news, GitHub repositories, official documentation, and general benchmarks (e.g., YOLOv12 release dates).",
+    "search_paper": "Use for academic papers, ArXiv, deep mathematical explanations, and formal peer-reviewed metrics (e.g., original PD-SORT or OC-SORT papers).",
+    "summarize": "Integrate findings from web or papers into knowledge base. ALWAYS follow any search step.",
+    "rag_agent": "Check local vector database for previously saved research or private documents.",
+    "synth_agent": "Final report generation."
+}
+
+descriptions_str = "\n".join([f"- {k}: {v}" for k, v in STEP_DESCRIPTIONS.items()])
 
 
 def _parse_planner_output(text: str) -> Dict[str, Any]:
@@ -50,35 +61,30 @@ def planner_node(state: GraphState) -> Dict[str, Any]:
     print(f"[Planner] Processing: {query}")
 
     prompt = f"""
-You are a deterministic planning engine for an AI research system.
+        You are a Senior Research Architect. Decompose the query into a strategic execution plan.
 
-TASK:
-1. Break the user query into 1–3 sub-queries for information retrieval.
-2. Create an execution plan using ONLY allowed steps.
+        USER QUERY: "{query}"
+        MEMORY QUALITY: {memory_quality:.2f} (1.0 means we already have the answer in history)
 
-QUERY:
-{query}
+        AVAILABLE STEPS:
+        {descriptions_str}
 
-MEMORY QUALITY:
-{memory_quality:.2f}
+        STRICT PLANNING RULES:
+        1. Use 'search_paper' specifically for academic theory, formulas, and official benchmarks (e.g., ArXiv papers for PD-SORT).
+        2. Use 'search_web' for latest news, GitHub repos, and recent blog posts (e.g., YOLOv12 release).
+        3. Every 'search_web' or 'search_paper' MUST be followed by 'summarize' to process raw data.
+        4. If MEMORY QUALITY > 0.8, favor 'rag_agent' -> 'synth_agent' to save time.
+        5. The final step MUST ALWAYS be 'synth_agent'.
 
-ALLOWED STEPS:
-{ALLOWED_STEPS}
-
-RULES:
-- Always include "research" for technical/scientific topics
-- If memory_quality > 0.8, you may simplify plan
-- Do NOT add unknown steps
-- Output MUST be valid JSON only
-
-OUTPUT FORMAT:
-{{
-  "sub_queries": ["..."],
-  "plan": ["load_memory", "research", "rag_agent", "synth_agent"]
-}}
-"""
+        OUTPUT JSON FORMAT:
+        {{
+        "sub_queries": ["query 1", "query 2"],
+        "plan": ["step1", "step2", "synth_agent"]
+        }}
+    """
 
     llm_response = call_openrouter(prompt)
+    print(f"DEBUG LLM RAW: {llm_response}")
     data = _parse_planner_output(llm_response or "")
 
     return {
@@ -88,6 +94,7 @@ OUTPUT FORMAT:
         "observations": [
             {
                 "step": "planner",
+                "plan": data["plan"],
                 "sub_queries": data["sub_queries"]
             }
         ]

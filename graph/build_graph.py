@@ -11,31 +11,59 @@ from agents.rag_agent import rag_node
 from agents.research_agent import research_node
 from agents.synth_agent import synth_node
 from graph.state import GraphState
+from agents.summarize_agent import summarize_node
 
 def build_production_pipeline():
     g = StateGraph(GraphState)
 
-    g.add_node("planner", planner_node)
+    # Đăng ký toàn bộ Node
     g.add_node("load_memory", load_memory_node)
+    g.add_node("planner", planner_node)
     g.add_node("research", research_node)
+    g.add_node("summarize", summarize_node)
     g.add_node("rag_agent", rag_node)
+    g.add_node("memory_rag", memory_rag_node)
     g.add_node("replanner", replanner_node)
     g.add_node("synth_agent", synth_node)
     g.add_node("store_memory", store_memory_node)
 
+    # Thiết lập luồng chạy (Edges)
     g.set_entry_point("load_memory")
     
     g.add_edge("load_memory", "planner")
-    g.add_edge("planner", "research")
-    g.add_edge("research", "rag_agent")
-    g.add_edge("rag_agent", "replanner")
+    
+    g.add_conditional_edges(
+        "planner",
+        route_after_planner,
+        {
+            "research": "research",
+            "rag_agent": "rag_agent",
+            "summarize": "memory_rag"
+        }
+    )
+
+    g.add_edge("research", "summarize")
+
+    g.add_conditional_edges(
+        "summarize",
+        route_after_summarize,
+        {
+            "rag_agent": "rag_agent",
+            "memory_rag": "memory_rag"
+        }
+    )
+
+    g.add_edge("rag_agent", "memory_rag")
+    g.add_edge("memory_rag", "replanner")
 
     g.add_conditional_edges(
         "replanner",
-        lambda s: s.get("replan_status"),
+        route_after_replan,
         {
-            "continue": "research",
-            "done": "synth_agent"
+            "research": "research",
+            "rag_agent": "rag_agent",
+            "summarize": "summarize",
+            "synth_agent": "synth_agent"
         }
     )
 
@@ -44,6 +72,44 @@ def build_production_pipeline():
 
     return g.compile()
 
-# Alias cho các caller cũ nếu cần
-def build_research_graph():
-    return build_production_pipeline()
+def route_after_planner(state: GraphState):
+    """Quyết định đi vào Research, RAG hay nhảy thẳng tới Summarize."""
+    plan = state.get("plan") or []
+    # Nếu kế hoạch có các bước tìm kiếm
+    if any(s in plan for s in ["research", "search_web", "search_paper"]):
+        return "research"
+    # Nếu chỉ cần RAG nội bộ
+    if "rag_agent" in plan:
+        return "rag_agent"
+    return "summarize"
+
+def route_after_summarize(state: GraphState):
+    """Quyết định có cần đối soát RAG sau khi đã có dữ liệu Web/Paper không."""
+    plan = state.get("plan") or []
+    if "rag_agent" in plan:
+        return "rag_agent"
+    return "memory_rag" # Nhảy thẳng tới trạm gác bộ nhớ
+
+def route_after_replan(state: GraphState):
+    status = state.get("replan_status")
+    
+    # Nếu xong thì đi viết báo cáo
+    if status == "done":
+        return "synth_agent"
+
+    # Nếu cần tiếp tục, kiểm tra xem bước tiếp theo là gì
+    plan = state.get("plan") or []
+    if not plan:
+        return "synth_agent"
+
+    next_step = plan[0]
+    
+    # Điều hướng linh hoạt dựa trên kế hoạch mới
+    if next_step in ["research", "search_web", "search_paper"]:
+        return "research"
+    if next_step == "rag_agent":
+        return "rag_agent"
+    if next_step == "summarize":
+        return "summarize"
+        
+    return "research" # Fallback mặc định

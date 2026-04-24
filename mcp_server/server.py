@@ -63,12 +63,13 @@ def _normalize_web_results(items: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     for it in items[:3]:
         title = str(it.get("title") or "").strip()
         content = str(it.get("content") or "").strip()
-        if title or content:
-            out.append({"title": title, "content": content})
+        raw_content = str(it.get("raw_content") or "").strip()
+        if title or content or raw_content:
+            out.append({"title": title, "content": content, "raw_content": raw_content})
     return out[:3]
 
 
-def _search_web_tavily(q: str) -> List[Dict[str, str]]:
+def _search_web_tavily(q: str, include_raw_content: bool = False) -> List[Dict[str, str]]:
     """
     PRIMARY web search: Tavily if TAVILY_API_KEY exists.
     Returns [] on any failure (demo-safe).
@@ -80,15 +81,20 @@ def _search_web_tavily(q: str) -> List[Dict[str, str]]:
     print("[Web Search - Tavily]")
     try:
         from tavily import TavilyClient
-
         client = TavilyClient(api_key=api_key)
-        # Tavily's python SDK wraps HTTP; keep result count small for demos.
-        res = client.search(query=q, max_results=3)
+        
+        # Gửi cờ include_raw_content cho Tavily
+        res = client.search(query=q, max_results=3, include_raw_content=include_raw_content)
         items = res.get("results") or []
+        
         mapped: List[Dict[str, Any]] = []
         for r in items[:3]:
-            mapped.append({"title": r.get("title") or "", "content": r.get("content") or ""})
-        return _normalize_web_results(mapped)
+            mapped.append({
+                "title": r.get("title") or "", 
+                "content": r.get("content") or "",
+                "raw_content": r.get("raw_content") if include_raw_content else None 
+            })
+        return mapped
     except Exception as e:
         print("[Web Search - Tavily]", "failed:", type(e).__name__)
         return []
@@ -195,14 +201,14 @@ def run_pipeline(payload: Dict[str, Any] = Body(...)) -> Dict[str, Any]:
 
 
 @app.get("/search_web")
-def search_web(q: str = Query(..., min_length=1)) -> Dict[str, Any]:
-    key = _cache_key("/search_web", q)
+def search_web(q: str = Query(..., min_length=1), include_raw_content: bool = Query(False)) -> Dict[str, Any]:
+    key = _cache_key("/search_web", q, extra=(("raw", str(include_raw_content)),))
     cached = _cache.get(key)
     if cached is not None:
         return {"query": q, "results": cached, "cached": True}
 
     # Hybrid search: try Tavily first, then DuckDuckGo fallback.
-    results = _search_web_tavily(q)
+    results = _search_web_tavily(q, include_raw_content)
     if not results:
         results = _search_web_ddg(q)
 

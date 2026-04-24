@@ -337,22 +337,35 @@ def load_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def memory_rag_node(state: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Combine memory_context + retrieved docs into unified `context`.
-    Keeps output deterministic (rule-based).
-    """
     query = str(state.get("query") or "").strip()
-    history: List[Dict[str, Any]] = state.get("history") or []
-    memory_hits: List[Dict[str, Any]] = state.get("memory_hits") or []
-    docs: List[Dict[str, Any]] = state.get("docs", []) or []
-    errors_raw = list(state.get("errors") or [])
-    errors: List[str] = [str(e) for e in errors_raw]
-    observations: List[Dict[str, Any]] = list(state.get("observations") or [])
+    history = state.get("history") or []
+    memory_hits = state.get("memory_hits") or []
+    
+    # LẤY THÊM TRI THỨC MỚI TỪ VÒNG LẶP RESEARCH
+    collected_knowledge = state.get("collected_knowledge") or ""
 
-    context = format_memory_context(history=history, memory_hits=memory_hits[:5], docs=docs)
-    print("[Memory] Used in context:", bool(history or memory_hits))
-    observations.append({"step": "memory_rag", "ok": True, "note": f"ctx_chars={len(context)}"})
-    return {"query": query, "memory_context": context, "errors": errors, "observations": observations}
+    conflict_flag = state.get("memory_conflict", False)
+    conflict_notes = ""
+    
+    if conflict_flag and collected_knowledge:
+        conflict_notes = f"Potential discrepancy between new research and internal logs regarding: {query}"
+    docs = state.get("raw_documents") or []
+
+    # Format lại context để LLM thấy rõ: Cái gì là Cũ, cái gì là Mới tìm được
+    context = f"""
+        [CURRENT RESEARCH SUMMARY]
+        {collected_knowledge if collected_knowledge else "(No new data yet)"}
+
+        {format_memory_context(history=history, memory_hits=memory_hits[:5], docs=docs)}
+    """.strip()
+
+    print(f"[Memory] Unified context prepared ({len(context)} chars)")
+    
+    return {
+        "memory_context": context,
+        "memory_conflict": conflict_flag,
+        "conflict_notes": conflict_notes
+    }
 
 
 def store_memory_node(state: Dict[str, Any]) -> Dict[str, Any]:

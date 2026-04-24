@@ -15,20 +15,30 @@ class ToolResult:
 
 class ToolClient:
     """
-    Thin MCP tool abstraction layer.
-    Keeps endpoint paths/payload mapping out of agent logic.
+    Thin MCP tool abstraction layer (Updated).
+    Hỗ trợ truyền tham số để lấy raw content cho nghiên cứu chuyên sâu.
     """
 
-    def search_web(self, q: str) -> ToolResult:
+    def search_web(self, q: str, include_raw_content: bool = False) -> ToolResult:
+        """
+        Gửi yêu cầu tìm kiếm web. 
+        Nếu include_raw_content=True, Tavily sẽ trả về toàn bộ nội dung text của trang web.
+        """
         try:
-            res = call_mcp("/search_web", q, timeout_s=20)
+            # Truyền include_raw_content vào extra_params để MCP Server xử lý
+            res = call_mcp(
+                "/search_web", 
+                q, 
+                timeout_s=30, # Tăng timeout vì lấy raw content sẽ chậm hơn snippet
+                extra_params={"include_raw_content": include_raw_content}
+            )
             return ToolResult(ok=True, data=res)
         except McpError as e:
             return ToolResult(ok=False, data={"query": q, "results": []}, error=str(e))
 
     def search_paper(self, q: str) -> ToolResult:
         try:
-            res = call_mcp("/search_paper", q, timeout_s=25)
+            res = call_mcp("/search_paper", q, timeout_s=30)
             return ToolResult(ok=True, data=res)
         except McpError as e:
             return ToolResult(ok=False, data={"query": q, "results": []}, error=str(e))
@@ -39,4 +49,3 @@ class ToolClient:
             return ToolResult(ok=True, data=res)
         except McpError as e:
             return ToolResult(ok=False, data={"query": q, "k": k, "docs": []}, error=str(e))
-

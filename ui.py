@@ -13,7 +13,7 @@ def _mcp_url() -> str:
 
 def _post_run(query: str) -> Dict[str, Any]:
     url = f"{_mcp_url()}/run"
-    resp = requests.post(url, json={"q": query}, timeout=)
+    resp = requests.post(url, json={"q": query}, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
@@ -23,7 +23,7 @@ def _post_run_with_session(query: str, session_id: str | None) -> Dict[str, Any]
     payload: Dict[str, Any] = {"q": query}
     if session_id:
         payload["session_id"] = session_id
-    resp = requests.post(url, json=payload, timeout=180)
+    resp = requests.post(url, json=payload, timeout=360)
     resp.raise_for_status()
     return resp.json()
 
@@ -33,7 +33,7 @@ st.title("AI Research Assistant")
 
 with st.container():
     query = st.text_input("Query", placeholder="Câu hỏi nghiên cứu của bạn là gì?")
-    session_id = st.text_input("session_id (optional)", value="demo-session-1")
+    session_id = st.text_input("session_id (optional)", value="test")
     run = st.button("Run", type="primary")
 
     if run:
@@ -50,9 +50,9 @@ with st.container():
 
             st.divider()
 
-            st.subheader("🧠 Plan")
-            plan = data.get("plan") or []
-            st.write(plan if plan else "(none)")
+            # st.subheader("🧠 Plan")
+            # plan = data.get("plan") or []
+            # st.write(plan if plan else "(none)")
 
             st.subheader("✅ Answer")
             ans = str(data.get("answer") or "").strip()
